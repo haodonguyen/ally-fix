@@ -13,11 +13,11 @@ export async function GET(
   const { id } = await params;
   const db = getDb();
 
-  const audit = await getAuditById(db, id);
+  // Independent reads keyed by the same id — this endpoint is polled every 2s.
+  const [audit, issues] = await Promise.all([getAuditById(db, id), getIssuesByAudit(db, id)]);
   if (!audit) {
     return NextResponse.json({ error: "Audit not found." }, { status: 404 });
   }
 
-  const issues = await getIssuesByAudit(db, id);
   return NextResponse.json({ audit, issues });
 }

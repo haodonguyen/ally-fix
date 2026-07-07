@@ -1,9 +1,9 @@
 import { createAudit } from "@ally-fix/db";
 import { createAuditRequestSchema } from "@ally-fix/shared";
 import { NextResponse } from "next/server";
+import { assertUrlIsSafe } from "@ally-fix/shared/ssrf";
 import { getDb } from "@/lib/db";
 import { enqueueAudit } from "@/lib/queue";
-import { assertUrlIsSafe } from "@/lib/ssrf";
 
 // This route touches Postgres, Redis, and node:dns — force the Node.js runtime.
 export const runtime = "nodejs";

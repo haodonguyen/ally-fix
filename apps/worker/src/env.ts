@@ -1,19 +1,31 @@
 import type { LlmConfig, LlmProviderName } from "@ally-fix/llm";
 
-/** Reads and validates the environment the worker needs to run. */
+/** Reads a required env var, throwing if it is missing or empty. */
 function required(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`Missing required environment variable: ${name}`);
   return value;
 }
 
+/**
+ * Reads a positive-integer env var. Falls back to `fallback` when unset OR when
+ * the value isn't a finite positive number — plain `Number(x ?? d)` would let a
+ * value like "30s" through as NaN, which silently disables timeouts / TTLs.
+ */
+function positiveIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 export const env = {
   DATABASE_URL: required("DATABASE_URL"),
   REDIS_URL: required("REDIS_URL"),
   /** Max time to wait for a page to load before giving up, in milliseconds. */
-  SCAN_TIMEOUT_MS: Number(process.env.SCAN_TIMEOUT_MS ?? 30_000),
+  SCAN_TIMEOUT_MS: positiveIntEnv("SCAN_TIMEOUT_MS", 30_000),
   /** How long a cached LLM analysis stays valid, in seconds (default 30 days). */
-  LLM_CACHE_TTL_SECONDS: Number(process.env.LLM_CACHE_TTL_SECONDS ?? 60 * 60 * 24 * 30),
+  LLM_CACHE_TTL_SECONDS: positiveIntEnv("LLM_CACHE_TTL_SECONDS", 60 * 60 * 24 * 30),
 };
 
 /**

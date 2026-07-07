@@ -9,16 +9,18 @@ import type { Impact } from "./schemas";
  */
 export const SCORE_SATURATION = 30;
 
+/** Severity weight of a single impact (0 for an unrated issue). */
+export function impactWeight(impact: Impact | null): number {
+  return impact ? IMPACT_WEIGHT[impact] : 0;
+}
+
 /**
  * A single 0–100 accessibility score, weighted by issue severity so that a few
  * critical issues hurt far more than many minor ones. Shared between the worker
- * (which stores it) and the dashboard (which can recompute it for display).
+ * (which stores it) and the dashboard (which displays it).
  */
 export function computeAccessibilityScore(impacts: Array<Impact | null>): number {
-  const penalty = impacts.reduce<number>(
-    (sum, impact) => sum + (impact ? IMPACT_WEIGHT[impact] : 0),
-    0,
-  );
+  const penalty = impacts.reduce<number>((sum, impact) => sum + impactWeight(impact), 0);
   if (penalty === 0) return 100;
   return Math.round((100 * SCORE_SATURATION) / (SCORE_SATURATION + penalty));
 }

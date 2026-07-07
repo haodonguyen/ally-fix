@@ -16,7 +16,8 @@ export interface RuleGroup {
   analysis: LlmIssueAnalysis | null;
 }
 
-const IMPACT_CLASS: Record<Impact, string | undefined> = {
+/** Maps an axe impact to its badge CSS-module class. Shared with the report page. */
+export const IMPACT_CLASS: Record<Impact, string | undefined> = {
   critical: styles.critical,
   serious: styles.serious,
   moderate: styles.moderate,

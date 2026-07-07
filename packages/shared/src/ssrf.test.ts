@@ -19,8 +19,7 @@ beforeEach(() => {
 describe("assertUrlIsSafe", () => {
   it("allows a public URL", async () => {
     resolvesTo("93.184.216.34");
-    const result = await assertUrlIsSafe("https://example.com");
-    expect(result.ok).toBe(true);
+    expect((await assertUrlIsSafe("https://example.com")).ok).toBe(true);
   });
 
   it("rejects non-http(s) schemes without a DNS lookup", async () => {
@@ -57,6 +56,21 @@ describe("assertUrlIsSafe", () => {
   it("rejects a domain that resolves (rebinds) to a private IP", async () => {
     resolvesTo("10.1.2.3");
     expect((await assertUrlIsSafe("https://evil.example.com")).ok).toBe(false);
+  });
+
+  it("handles an IPv4 literal directly, without DNS", async () => {
+    expect((await assertUrlIsSafe("http://8.8.8.8")).ok).toBe(true);
+    expect((await assertUrlIsSafe("http://10.0.0.1")).ok).toBe(false);
+    expect(mockLookup).not.toHaveBeenCalled();
+  });
+
+  it("handles bracketed IPv6 literals directly", async () => {
+    // Loopback and unique-local are blocked; a public IPv6 literal is allowed —
+    // and none of these should hit DNS.
+    expect((await assertUrlIsSafe("http://[::1]/")).ok).toBe(false);
+    expect((await assertUrlIsSafe("http://[fd00::1]/")).ok).toBe(false);
+    expect((await assertUrlIsSafe("http://[2606:4700:4700::1111]/")).ok).toBe(true);
+    expect(mockLookup).not.toHaveBeenCalled();
   });
 
   it("rejects a malformed URL", async () => {

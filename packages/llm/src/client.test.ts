@@ -45,4 +45,15 @@ describe("createLlmClient.analyzeIssueGroup", () => {
     ).rejects.toThrow(/failed after 2 attempt/);
     expect(generate).toHaveBeenCalledTimes(2);
   });
+
+  it("does not retry an error the provider marks non-retryable", async () => {
+    const authError = Object.assign(new Error("Unauthorized"), { isRetryable: false });
+    const generate = vi.fn().mockRejectedValue(authError);
+    const client = createLlmClient(config, { generate, maxRetries: 3 });
+
+    await expect(
+      client.analyzeIssueGroup({ ruleId: "image-alt", htmlSnippets: ["<img>"] }),
+    ).rejects.toThrow(/failed after/);
+    expect(generate).toHaveBeenCalledOnce();
+  });
 });

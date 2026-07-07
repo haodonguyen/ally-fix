@@ -2,12 +2,13 @@ import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 
 /**
- * SSRF protection (required from Phase 1).
+ * SSRF protection (required from Phase 1), shared by the web API (at enqueue time)
+ * and the worker (at scan time). AllyFix only scans public pages, so we resolve a
+ * URL's hostname and reject anything pointing at the loopback interface, a private
+ * network, or a cloud metadata endpoint (169.254.169.254).
  *
- * AllyFix only scans public pages. Before we hand a URL to the worker we resolve
- * its hostname and reject anything that points at the loopback interface, a
- * private network, or a cloud metadata endpoint (169.254.169.254) — the classic
- * targets of a server-side request forgery.
+ * This lives in a Node-only subpath (`@ally-fix/shared/ssrf`) and is never exported
+ * from the package index, so it never reaches the browser bundle.
  */
 export type SsrfResult = { ok: true; url: string } | { ok: false; reason: string };
 
@@ -28,21 +29,29 @@ export async function assertUrlIsSafe(rawUrl: string): Promise<SsrfResult> {
     return { ok: false, reason: "Only http and https URLs can be scanned." };
   }
 
-  const hostname = parsed.hostname.toLowerCase();
-  if (BLOCKED_HOSTNAMES.has(hostname)) {
+  // URL keeps IPv6 literals wrapped in brackets (e.g. "[::1]"); strip them so
+  // both the blocklist and dns.lookup see the bare host.
+  const rawHost = parsed.hostname.toLowerCase();
+  const host = rawHost.startsWith("[") && rawHost.endsWith("]") ? rawHost.slice(1, -1) : rawHost;
+
+  if (BLOCKED_HOSTNAMES.has(host)) {
     return { ok: false, reason: "This host is not allowed." };
   }
 
-  // Resolve the hostname and reject if ANY resolved address is internal. This also
-  // covers IP literals, since dns.lookup returns them unchanged.
-  let addresses: { address: string }[];
-  try {
-    addresses = await lookup(hostname, { all: true });
-  } catch {
-    return { ok: false, reason: "Could not resolve that host." };
+  // For an IP literal we check it directly; otherwise resolve the hostname and
+  // reject if ANY resolved address is internal.
+  let addresses: string[];
+  if (isIP(host)) {
+    addresses = [host];
+  } else {
+    try {
+      addresses = (await lookup(host, { all: true })).map((entry) => entry.address);
+    } catch {
+      return { ok: false, reason: "Could not resolve that host." };
+    }
   }
 
-  if (addresses.length === 0 || addresses.some(({ address }) => isPrivateAddress(address))) {
+  if (addresses.length === 0 || addresses.some(isPrivateAddress)) {
     return { ok: false, reason: "That URL resolves to a private or internal address." };
   }
 

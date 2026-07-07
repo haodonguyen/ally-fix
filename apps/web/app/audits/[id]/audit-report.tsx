@@ -2,37 +2,33 @@
 
 import {
   AUTOMATED_SCAN_DISCLAIMER,
-  computeAccessibilityScore,
-  IMPACT_WEIGHT,
+  impactWeight,
   scoreBand,
   type AuditStatus,
+  type Audit,
   type Impact,
-  type LlmIssueAnalysis,
+  type Issue,
   type WcagLevel,
 } from "@ally-fix/shared";
 import { useEffect, useState } from "react";
 import { CopyButton } from "./copy-button";
-import { IssueAccordion, type RuleGroup } from "./issue-accordion";
+import { IMPACT_CLASS, IssueAccordion, type RuleGroup } from "./issue-accordion";
 import styles from "./report.module.css";
 
-interface AuditDto {
-  id: string;
-  url: string;
-  status: AuditStatus;
-  score: number | null;
-  error: string | null;
-}
-
-interface IssueDto {
-  id: string;
-  ruleId: string;
-  wcagCriteria: string | null;
-  wcagLevel: WcagLevel | null;
-  impact: Impact | null;
-  htmlSnippet: string | null;
-  selector: string | null;
-  llmAnalysis: LlmIssueAnalysis | null;
-}
+// The API returns raw DB rows as JSON; we only read these fields, so derive the
+// shapes from the shared domain types to stay in sync with the schema.
+type AuditDto = Pick<Audit, "id" | "url" | "status" | "score" | "error">;
+type IssueDto = Pick<
+  Issue,
+  | "id"
+  | "ruleId"
+  | "wcagCriteria"
+  | "wcagLevel"
+  | "impact"
+  | "htmlSnippet"
+  | "selector"
+  | "llmAnalysis"
+>;
 
 interface AuditResponse {
   audit: AuditDto;
@@ -41,12 +37,6 @@ interface AuditResponse {
 
 const TERMINAL: AuditStatus[] = ["completed", "failed"];
 const IMPACT_ORDER: Impact[] = ["critical", "serious", "moderate", "minor"];
-const IMPACT_CLASS: Record<Impact, string | undefined> = {
-  critical: styles.critical,
-  serious: styles.serious,
-  moderate: styles.moderate,
-  minor: styles.minor,
-};
 
 export function AuditReport({ auditId }: { auditId: string }) {
   const [data, setData] = useState<AuditResponse | null>(null);
@@ -135,8 +125,6 @@ export function AuditReport({ auditId }: { auditId: string }) {
 }
 
 function CompletedReport({ audit, issues }: { audit: AuditDto; issues: IssueDto[] }) {
-  const score = audit.score ?? computeAccessibilityScore(issues.map((issue) => issue.impact));
-  const band = scoreBand(score);
   const counts = countByImpact(issues);
   const ruleGroups = buildRuleGroups(issues);
   const wcagRows = buildWcagRows(issues);
@@ -145,18 +133,12 @@ function CompletedReport({ audit, issues }: { audit: AuditDto; issues: IssueDto[
     <>
       <section aria-labelledby="score-heading">
         <h2 id="score-heading">Score</h2>
-        <div className={styles.scoreRow}>
-          <p className={`${styles.scoreValue} ${styles[band.band]}`}>
-            <span className="sr-only">
-              Accessibility score {score} out of 100, {band.label}
-            </span>
-            <span aria-hidden="true">{score}</span>
-            <small aria-hidden="true">/100</small>
-          </p>
-          <span className={`${styles.band} ${styles[band.band]}`} aria-hidden="true">
-            {band.label}
-          </span>
-        </div>
+        {/* The worker stores the authoritative score; we display it, never re-derive it. */}
+        {audit.score !== null ? (
+          <ScoreBadge score={audit.score} />
+        ) : (
+          <p>A score isn’t available for this audit.</p>
+        )}
         <p>
           Found <strong>{issues.length}</strong> automated{" "}
           {issues.length === 1 ? "issue" : "issues"}.
@@ -220,6 +202,24 @@ function CompletedReport({ audit, issues }: { audit: AuditDto; issues: IssueDto[
   );
 }
 
+function ScoreBadge({ score }: { score: number }) {
+  const band = scoreBand(score);
+  return (
+    <div className={styles.scoreRow}>
+      <p className={`${styles.scoreValue} ${styles[band.band]}`}>
+        <span className="sr-only">
+          Accessibility score {score} out of 100, {band.label}
+        </span>
+        <span aria-hidden="true">{score}</span>
+        <small aria-hidden="true">/100</small>
+      </p>
+      <span className={`${styles.band} ${styles[band.band]}`} aria-hidden="true">
+        {band.label}
+      </span>
+    </div>
+  );
+}
+
 function ShareReport() {
   const [url, setUrl] = useState("");
   useEffect(() => setUrl(window.location.href), []);
@@ -234,10 +234,6 @@ interface WcagRow {
   criteria: string;
   level: WcagLevel | null;
   count: number;
-}
-
-function impactWeight(impact: Impact | null): number {
-  return impact ? IMPACT_WEIGHT[impact] : 0;
 }
 
 function countByImpact(issues: IssueDto[]): Record<Impact, number> {

@@ -19,6 +19,18 @@ export interface CreateLlmClientOptions {
 }
 
 /**
+ * Whether an error is worth retrying. Vercel AI SDK provider errors expose an
+ * `isRetryable` flag (false for 4xx like a bad key or unknown model); anything
+ * without the flag — notably a Zod schema-validation failure — is retryable.
+ */
+function isRetryable(error: unknown): boolean {
+  if (error && typeof error === "object" && "isRetryable" in error) {
+    return (error as { isRetryable?: unknown }).isRetryable !== false;
+  }
+  return true;
+}
+
+/**
  * Creates a provider-agnostic LLM client. Structured output is validated against
  * `llmIssueAnalysisSchema` (from @ally-fix/shared); a parse failure — whether the
  * SDK's or a misbehaving provider's — triggers a retry.
@@ -54,6 +66,9 @@ export function createLlmClient(
           return llmIssueAnalysisSchema.parse(raw);
         } catch (error) {
           lastError = error;
+          // Don't waste attempts (and quota) on errors that can't succeed on retry,
+          // e.g. a 401 for a bad key or a 404 for an unknown model.
+          if (!isRetryable(error)) break;
         }
       }
 
