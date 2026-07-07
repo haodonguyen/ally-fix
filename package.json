@@ -5,7 +5,7 @@
   "description": "AllyFix — an open-source accessibility auditor that explains WHY each WCAG issue matters and HOW to fix it, right in your code.",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   },
   "packageManager": "pnpm@11.10.0",
   "scripts": {
@@ -15,7 +15,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "pnpm -r test",
+    "test": "vitest run",
     "db:generate": "pnpm --filter @ally-fix/db db:generate",
     "db:migrate": "pnpm --filter @ally-fix/db db:migrate"
   },
@@ -25,6 +25,7 @@
     "eslint": "^10.6.0",
     "prettier": "^3.9.4",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.62.1"
+    "typescript-eslint": "^8.62.1",
+    "vitest": "^4.1.10"
   }
 }

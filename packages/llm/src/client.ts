@@ -1,0 +1,64 @@
+import { llmIssueAnalysisSchema, type LlmIssueAnalysis } from "@ally-fix/shared";
+import { generateObject } from "ai";
+import { ANALYSIS_SYSTEM_PROMPT, buildAnalysisPrompt } from "./prompt";
+import { resolveModel } from "./providers";
+import type { IssueGroupInput, LlmClient, LlmConfig } from "./types";
+
+/**
+ * The single-shot generation primitive: given a system + user prompt, return the
+ * model's raw object. The real implementation calls the AI SDK; tests inject a
+ * fake so the retry/validation logic can be exercised without a provider.
+ */
+export type SingleShotGenerate = (args: { system: string; prompt: string }) => Promise<unknown>;
+
+export interface CreateLlmClientOptions {
+  /** Extra attempts after the first, on a validation or provider failure. Default 2. */
+  maxRetries?: number;
+  /** Test seam — replaces the real model call. */
+  generate?: SingleShotGenerate;
+}
+
+/**
+ * Creates a provider-agnostic LLM client. Structured output is validated against
+ * `llmIssueAnalysisSchema` (from @ally-fix/shared); a parse failure — whether the
+ * SDK's or a misbehaving provider's — triggers a retry.
+ */
+export function createLlmClient(
+  config: LlmConfig,
+  options: CreateLlmClientOptions = {},
+): LlmClient {
+  const maxRetries = options.maxRetries ?? 2;
+
+  const generate: SingleShotGenerate =
+    options.generate ??
+    (async ({ system, prompt }) => {
+      const { object } = await generateObject({
+        model: resolveModel(config),
+        schema: llmIssueAnalysisSchema,
+        system,
+        prompt,
+        // We own the retry loop below, so don't let the SDK stack its own on top.
+        maxRetries: 0,
+      });
+      return object;
+    });
+
+  return {
+    async analyzeIssueGroup(input: IssueGroupInput): Promise<LlmIssueAnalysis> {
+      const prompt = buildAnalysisPrompt(input);
+      let lastError: unknown;
+
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+          const raw = await generate({ system: ANALYSIS_SYSTEM_PROMPT, prompt });
+          return llmIssueAnalysisSchema.parse(raw);
+        } catch (error) {
+          lastError = error;
+        }
+      }
+
+      const reason = lastError instanceof Error ? lastError.message : String(lastError);
+      throw new Error(`LLM analysis failed after ${maxRetries + 1} attempt(s): ${reason}`);
+    },
+  };
+}

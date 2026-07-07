@@ -4,6 +4,7 @@ import {
   AUTOMATED_SCAN_DISCLAIMER,
   type AuditStatus,
   type Impact,
+  type LlmIssueAnalysis,
   type WcagLevel,
 } from "@ally-fix/shared";
 import { useEffect, useState } from "react";
@@ -24,6 +25,7 @@ interface IssueDto {
   impact: Impact | null;
   htmlSnippet: string | null;
   selector: string | null;
+  llmAnalysis: LlmIssueAnalysis | null;
 }
 
 interface AuditResponse {
@@ -135,6 +137,7 @@ function IssueTable({ issues }: { issues: IssueDto[] }) {
           <Th>Level</Th>
           <Th>Impact</Th>
           <Th>Element</Th>
+          <Th>Explanation &amp; fix</Th>
         </tr>
       </thead>
       <tbody>
@@ -151,10 +154,40 @@ function IssueTable({ issues }: { issues: IssueDto[] }) {
                 {issue.selector ?? issue.htmlSnippet ?? "—"}
               </code>
             </Td>
+            <Td>{issue.llmAnalysis ? <AnalysisDetails analysis={issue.llmAnalysis} /> : "—"}</Td>
           </tr>
         ))}
       </tbody>
     </table>
+  );
+}
+
+/** Expandable LLM explanation + suggested fix. Uses native <details> for accessibility. */
+function AnalysisDetails({ analysis }: { analysis: LlmIssueAnalysis }) {
+  return (
+    <details>
+      <summary>
+        View fix <span aria-hidden="true">·</span>{" "}
+        <span style={{ fontSize: "0.8rem" }}>priority: {analysis.priority}</span>
+      </summary>
+      <p>{analysis.explanation}</p>
+      <p style={{ fontSize: "0.85rem" }}>
+        <strong>Affected users:</strong> {analysis.affectedUsers.join(", ")}
+      </p>
+      <pre
+        style={{
+          background: "#f4f4f4",
+          padding: "0.75rem",
+          overflowX: "auto",
+          fontSize: "0.8rem",
+        }}
+      >
+        <code>{analysis.fixCode}</code>
+      </pre>
+      <p style={{ fontSize: "0.8rem", opacity: 0.7 }}>
+        This fix is an AI-generated suggestion — review it before applying.
+      </p>
+    </details>
   );
 }
 

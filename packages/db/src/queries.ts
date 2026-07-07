@@ -1,4 +1,5 @@
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
+import type { LlmIssueAnalysis } from "@ally-fix/shared";
 import type { Database } from "./client";
 import { audits, issues, type AuditRow, type IssueRow, type NewIssueRow } from "./schema";
 
@@ -45,6 +46,19 @@ export async function failAudit(db: Database, id: string, error: string): Promis
 export async function insertIssues(db: Database, rows: NewIssueRow[]): Promise<void> {
   if (rows.length === 0) return;
   await db.insert(issues).values(rows);
+}
+
+/** Attach an LLM analysis to every issue of a given rule within one audit. */
+export async function setAnalysisForRule(
+  db: Database,
+  auditId: string,
+  ruleId: string,
+  analysis: LlmIssueAnalysis,
+): Promise<void> {
+  await db
+    .update(issues)
+    .set({ llmAnalysis: analysis })
+    .where(and(eq(issues.auditId, auditId), eq(issues.ruleId, ruleId)));
 }
 
 /** Fetch a single audit by id, or undefined if it does not exist. */

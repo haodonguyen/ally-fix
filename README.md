@@ -53,7 +53,7 @@ ally-fix/
 
 ## Getting started
 
-Requires Node 20+ and pnpm.
+Requires Node 22.13+ and pnpm.
 
 ```bash
 # 1. Install dependencies
@@ -86,7 +86,12 @@ it is never written to the database, logged, or sent anywhere but the provider i
 
 Built in phases (see [`CLAUDE.md`](./CLAUDE.md)): **Phase 1** core scan pipeline →
 **Phase 2** LLM explanations + fixes → **Phase 3** report dashboard → **Phase 4** polish.
-This commit is the project scaffold — structure, config, and shared types only.
+
+- ✅ **Phase 1** — URL input, SSRF protection, BullMQ + Playwright/axe scan, raw issues in Postgres and UI.
+- ✅ **Phase 2** — provider-agnostic LLM layer (Ollama/Groq/Gemini) with Zod-validated structured
+  output, batching by rule, and Redis caching. Analysis is best-effort: a missing LLM provider
+  never fails a scan.
+- ⏳ **Phase 3** — polished, WCAG 2.2 AA report dashboard.
 
 ## License
 

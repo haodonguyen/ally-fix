@@ -1,6 +1,6 @@
 # AllyFix web app (Next.js). Build context is the repo root.
 # Multi-stage: install + build, then run Next's minimal standalone server.
-FROM node:20-slim AS base
+FROM node:22-slim AS base
 RUN corepack enable
 WORKDIR /app
 

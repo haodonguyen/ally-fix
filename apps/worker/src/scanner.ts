@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { chromium } from "playwright";
 import type { Impact, WcagLevel } from "@ally-fix/shared";
+import { extractWcagCriteria, extractWcagLevel } from "./wcag";
 
 /**
  * A single accessibility issue produced by a scan, before it is tied to an audit.
@@ -51,26 +52,4 @@ export async function scanUrl(url: string, timeoutMs: number): Promise<ScannedIs
   } finally {
     await browser.close();
   }
-}
-
-/**
- * axe tags carry the WCAG success criterion as e.g. "wcag143" (→ 1.4.3) or
- * "wcag1410" (→ 1.4.10). First digit is the principle, second the guideline,
- * the rest the criterion number.
- */
-function extractWcagCriteria(tags: string[]): string | null {
-  for (const tag of tags) {
-    const match = /^wcag(\d)(\d)(\d+)$/.exec(tag);
-    if (match) return `${match[1]}.${match[2]}.${match[3]}`;
-  }
-  return null;
-}
-
-/** Level tags look like "wcag2a", "wcag21aa", "wcag22aaa". Prefer the strictest present. */
-function extractWcagLevel(tags: string[]): WcagLevel | null {
-  const levelTags = tags.filter((tag) => /^wcag2\d?(a|aa|aaa)$/.test(tag));
-  if (levelTags.some((tag) => tag.endsWith("aaa"))) return "AAA";
-  if (levelTags.some((tag) => tag.endsWith("aa"))) return "AA";
-  if (levelTags.some((tag) => tag.endsWith("a"))) return "A";
-  return null;
 }

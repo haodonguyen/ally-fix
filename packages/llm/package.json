@@ -13,6 +13,10 @@
     "test": "echo \"no tests yet\" && exit 0"
   },
   "dependencies": {
-    "@ally-fix/shared": "workspace:*"
+    "@ai-sdk/google": "^4.0.8",
+    "@ai-sdk/groq": "^4.0.5",
+    "@ally-fix/shared": "workspace:*",
+    "ai": "^7.0.16",
+    "ollama-ai-provider-v2": "^3.6.0"
   }
 }
