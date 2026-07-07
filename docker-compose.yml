@@ -1,0 +1,80 @@
+# =============================================================================
+# AllyFix — run the whole stack with one command: `docker compose up`
+#
+#   postgres  -> PostgreSQL 16 (audits + issues, JSONB for raw axe output)
+#   redis     -> Redis 7 (BullMQ queue + LLM result cache)
+#   worker    -> Playwright + axe-core scanner (separated from web: needs Chromium)
+#   web       -> Next.js frontend + API routes
+#
+# The worker is a separate service on purpose: Playwright ships a heavy Chromium
+# binary that cannot run on Vercel's serverless runtime.
+# =============================================================================
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: allyfix
+      POSTGRES_PASSWORD: allyfix
+      POSTGRES_DB: allyfix
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U allyfix -d allyfix"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Point at the in-network service names, overriding localhost defaults.
+      DATABASE_URL: postgres://allyfix:allyfix@postgres:5432/allyfix
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://allyfix:allyfix@postgres:5432/allyfix
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
