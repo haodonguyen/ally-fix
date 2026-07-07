@@ -14,6 +14,7 @@
     "@ally-fix/db": "workspace:*",
     "@ally-fix/llm": "workspace:*",
     "@ally-fix/shared": "workspace:*",
+    "@radix-ui/react-accordion": "^1.2.16",
     "bullmq": "^5.79.2",
     "ioredis": "^5.11.1",
     "next": "^16.2.10",

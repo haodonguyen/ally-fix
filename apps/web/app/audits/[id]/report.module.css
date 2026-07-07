@@ -1,0 +1,267 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.backLink {
+  display: inline-block;
+  font-size: 0.9rem;
+}
+
+.header h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.5rem;
+  overflow-wrap: anywhere;
+}
+
+.url {
+  color: #444;
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  color: #444;
+  font-size: 0.9rem;
+}
+
+/* --- Score --------------------------------------------------------------- */
+.scoreRow {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.scoreValue {
+  font-size: 3rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 1rem 1.5rem;
+  border-radius: 0.75rem;
+  border: 2px solid currentColor;
+}
+
+.scoreValue small {
+  font-size: 1rem;
+  font-weight: 400;
+}
+
+.band {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.good {
+  background: #dcfce7;
+  color: #14532d;
+}
+.fair {
+  background: #fef9c3;
+  color: #713f12;
+}
+.poor {
+  background: #fee2e2;
+  color: #7f1d1d;
+}
+
+/* --- Summary counts ------------------------------------------------------ */
+.counts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.count {
+  border: 1px solid #d0d0d0;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.9rem;
+  min-width: 5rem;
+}
+
+.count strong {
+  display: block;
+  font-size: 1.5rem;
+}
+
+/* --- Badges -------------------------------------------------------------- */
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.critical {
+  background: #fee2e2;
+  color: #7f1d1d;
+}
+.serious {
+  background: #ffedd5;
+  color: #7c2d12;
+}
+.moderate {
+  background: #fef9c3;
+  color: #713f12;
+}
+.minor {
+  background: #e0f2fe;
+  color: #0c4a6e;
+}
+.levelBadge {
+  background: #ede9fe;
+  color: #4c1d95;
+}
+
+/* --- Tables -------------------------------------------------------------- */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table caption {
+  text-align: left;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 0.5rem;
+  border-bottom: 1px solid #e2e2e2;
+}
+
+.table th {
+  border-bottom: 2px solid #333;
+}
+
+/* --- Issue accordion ----------------------------------------------------- */
+.accordionItem {
+  border: 1px solid #d0d0d0;
+  border-radius: 0.5rem;
+  margin-bottom: 0.6rem;
+  overflow: hidden;
+}
+
+.accordionTrigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 1rem;
+  background: #f8f8f8;
+  border: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.accordionTrigger:hover {
+  background: #f0f0f0;
+}
+
+.accordionTrigger:focus-visible {
+  outline: 3px solid #1d4ed8;
+  outline-offset: -3px;
+}
+
+.triggerTitle {
+  font-weight: 600;
+  flex: 1 1 12rem;
+}
+
+.chevron {
+  transition: transform 150ms ease;
+}
+
+.accordionTrigger[data-state="open"] .chevron {
+  transform: rotate(180deg);
+}
+
+.accordionContent {
+  padding: 1rem;
+}
+
+.occurrences {
+  color: #444;
+  font-size: 0.9rem;
+}
+
+.fixHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 1rem 0 0.4rem;
+}
+
+.codeBlock {
+  margin: 0;
+  background: #1e1e1e;
+  color: #f4f4f4;
+  padding: 0.9rem;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  font-size: 0.85rem;
+}
+
+.selectorList {
+  margin: 0.5rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.selectorList code {
+  overflow-wrap: anywhere;
+}
+
+.reviewNote {
+  font-size: 0.85rem;
+  color: #444;
+  margin-top: 0.75rem;
+}
+
+.disclaimer {
+  font-size: 0.85rem;
+  color: #444;
+  border-top: 1px solid #e2e2e2;
+  padding-top: 1rem;
+}
+
+/* --- Buttons ------------------------------------------------------------- */
+.button {
+  font: inherit;
+  padding: 0.4rem 0.85rem;
+  border: 1px solid #1d4ed8;
+  background: #1d4ed8;
+  color: #fff;
+  border-radius: 0.4rem;
+  cursor: pointer;
+}
+
+.button:hover {
+  background: #1e40af;
+}
+
+.button:focus-visible {
+  outline: 3px solid #1d4ed8;
+  outline-offset: 2px;
+}
+
+.buttonSecondary {
+  background: #fff;
+  color: #1d4ed8;
+}
+
+.buttonSecondary:hover {
+  background: #eff6ff;
+}

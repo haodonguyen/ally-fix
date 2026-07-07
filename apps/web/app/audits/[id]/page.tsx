@@ -4,10 +4,7 @@ import { AuditReport } from "./audit-report";
 export default async function AuditPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   return (
-    <main style={{ maxWidth: "56rem", margin: "0 auto", padding: "3rem 1.5rem" }}>
-      <p>
-        <a href="/">← New scan</a>
-      </p>
+    <main style={{ maxWidth: "64rem", margin: "0 auto", padding: "2.5rem 1.5rem" }}>
       <AuditReport auditId={id} />
     </main>
   );

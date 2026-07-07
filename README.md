@@ -91,7 +91,10 @@ Built in phases (see [`CLAUDE.md`](./CLAUDE.md)): **Phase 1** core scan pipeline
 - ✅ **Phase 2** — provider-agnostic LLM layer (Ollama/Groq/Gemini) with Zod-validated structured
   output, batching by rule, and Redis caching. Analysis is best-effort: a missing LLM provider
   never fails a scan.
-- ⏳ **Phase 3** — polished, WCAG 2.2 AA report dashboard.
+- ✅ **Phase 3** — report dashboard: severity-weighted score, WCAG 2.2 breakdown, expandable issues
+  (Radix accordion) with copy-fix and shareable link. The dashboard itself passes axe WCAG 2.2 A/AA
+  with zero violations.
+- ⏳ **Phase 4** — polish (pick up to two: sitemap multi-page, scan comparison, PDF export, badge).
 
 ## License
 

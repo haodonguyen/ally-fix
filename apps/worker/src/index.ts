@@ -1,6 +1,10 @@
 import { createDb, completeAudit, failAudit, insertIssues, markAuditRunning } from "@ally-fix/db";
 import type { NewIssueRow } from "@ally-fix/db";
-import { AUDIT_QUEUE_NAME, auditJobPayloadSchema } from "@ally-fix/shared";
+import {
+  AUDIT_QUEUE_NAME,
+  auditJobPayloadSchema,
+  computeAccessibilityScore,
+} from "@ally-fix/shared";
 import { Worker } from "bullmq";
 import IORedis from "ioredis";
 import { analyzeAudit } from "./analyze";
@@ -46,7 +50,8 @@ const worker = new Worker(
         `[worker] audit ${auditId}: analysed ${result.analyzed} rule group(s), ${result.failed} failed`,
       );
 
-      await completeAudit(db, auditId);
+      const score = computeAccessibilityScore(scanned.map((issue) => issue.impact));
+      await completeAudit(db, auditId, { score });
     } catch (error) {
       // Record the failure on the audit so the UI can show it, then rethrow
       // so BullMQ also marks the job failed.
