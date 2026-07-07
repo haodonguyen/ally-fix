@@ -1,6 +1,11 @@
 packages:
   - "apps/*"
   - "packages/*"
+
+# Force a single ioredis version so BullMQ and our direct usage share one type/instance.
+overrides:
+  ioredis: "^5.11.1"
 allowBuilds:
   esbuild: true
+  msgpackr-extract: true
   sharp: true

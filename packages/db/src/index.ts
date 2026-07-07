@@ -1,3 +1,4 @@
 /** Public surface of @ally-fix/db. */
-export * from "./schema.js";
-export * from "./client.js";
+export * from "./schema";
+export * from "./client";
+export * from "./queries";

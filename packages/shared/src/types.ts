@@ -1,4 +1,4 @@
-import type { AuditStatus, Impact, LlmIssueAnalysis, WcagLevel } from "./schemas.js";
+import type { AuditStatus, Impact, LlmIssueAnalysis, WcagLevel } from "./schemas";
 
 /**
  * Domain entity types shared between the web app, worker, and db layer.

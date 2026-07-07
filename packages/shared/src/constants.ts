@@ -1,4 +1,7 @@
-import type { Impact } from "./schemas.js";
+import type { Impact } from "./schemas";
+
+/** Name of the BullMQ queue that carries audit jobs from the web app to the worker. */
+export const AUDIT_QUEUE_NAME = "audit-scan";
 
 /**
  * Relative weight of each axe-core impact level.

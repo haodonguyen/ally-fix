@@ -1,7 +1,7 @@
 # AllyFix scanner worker.
 # Uses Microsoft's Playwright image which already bundles Chromium + its OS deps,
 # so the worker can drive a real browser. Build context is the repo root.
-FROM mcr.microsoft.com/playwright:v1.49.1-jammy
+FROM mcr.microsoft.com/playwright:v1.61.1-noble
 
 WORKDIR /app
 
