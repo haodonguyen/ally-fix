@@ -33,5 +33,9 @@ pnpm-debug.log*
 .vscode/*
 !.vscode/extensions.json
 
+# AI-assistant context (kept locally, not part of the public repo)
+CLAUDE.md
+CLAUDE.local.md
+
 # Coverage
 coverage/

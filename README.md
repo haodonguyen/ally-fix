@@ -84,8 +84,8 @@ it is never written to the database, logged, or sent anywhere but the provider i
 
 ## Status
 
-Built in phases (see [`CLAUDE.md`](./CLAUDE.md)): **Phase 1** core scan pipeline →
-**Phase 2** LLM explanations + fixes → **Phase 3** report dashboard → **Phase 4** polish.
+Built in phases: **Phase 1** core scan pipeline → **Phase 2** LLM explanations + fixes →
+**Phase 3** report dashboard → **Phase 4** polish.
 
 - ✅ **Phase 1** — URL input, SSRF protection, BullMQ + Playwright/axe scan, raw issues in Postgres and UI.
 - ✅ **Phase 2** — provider-agnostic LLM layer (Ollama/Groq/Gemini) with Zod-validated structured
