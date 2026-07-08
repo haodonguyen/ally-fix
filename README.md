@@ -76,6 +76,12 @@ pnpm test         # tests, all packages
 pnpm db:generate  # generate Drizzle migrations from the schema
 ```
 
+## Deployment
+
+See [`DEPLOY.md`](./DEPLOY.md) for a hosted setup (Render web + worker, Neon
+Postgres, Upstash Redis, Groq), including the [`render.yaml`](./render.yaml)
+blueprint and the per-IP rate limiting used for the shared demo.
+
 ## Bring your own key
 
 AllyFix never hardcodes or stores API keys. Ollama runs locally for free by default.

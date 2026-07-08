@@ -17,6 +17,9 @@ RUN pnpm --filter @ally-fix/web build
 
 FROM base AS runtime
 ENV NODE_ENV=production
+# Bind all interfaces so container hosts (Render, etc.) can reach it; they inject PORT.
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
 # Next standalone output bundles the server and only the deps it needs.
 COPY --from=build /app/apps/web/.next/standalone ./
 COPY --from=build /app/apps/web/.next/static ./apps/web/.next/static

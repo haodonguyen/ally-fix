@@ -4,6 +4,10 @@ import { NextResponse } from "next/server";
 import { assertUrlIsSafe } from "@ally-fix/shared/ssrf";
 import { getDb } from "@/lib/db";
 import { enqueueAudit } from "@/lib/queue";
+import { checkAndConsume, clientIp } from "@/lib/rate-limit";
+
+/** Per-IP daily audit cap for the hosted demo. 0 = unlimited (self-host default). */
+const DAILY_LIMIT = Number(process.env.DAILY_AUDIT_LIMIT_PER_IP ?? 0);
 
 // This route touches Postgres, Redis, and node:dns — force the Node.js runtime.
 export const runtime = "nodejs";
@@ -21,6 +25,17 @@ export async function POST(request: Request): Promise<Response> {
   const safe = await assertUrlIsSafe(parsed.data.url);
   if (!safe.ok) {
     return NextResponse.json({ error: safe.reason }, { status: 400 });
+  }
+
+  // Rate-limit valid requests only, so the shared LLM key can't be drained.
+  const rate = await checkAndConsume(clientIp(request), DAILY_LIMIT);
+  if (!rate.allowed) {
+    return NextResponse.json(
+      {
+        error: `Daily scan limit reached (${rate.limit}/day per IP). Try again tomorrow, or self-host for unlimited scans.`,
+      },
+      { status: 429 },
+    );
   }
 
   const db = getDb();
