@@ -49,7 +49,7 @@ Accounts (all free): [Neon](https://neon.tech), [Upstash](https://upstash.com),
 ## 3. Groq key (for LLM explanations)
 
 1. Create an API key at the Groq console → `GROQ_API_KEY`. Model default is
-   `llama-3.3-70b-versatile`. Only the worker uses this, so it stays on your
+   `openai/gpt-oss-20b`. Only the worker uses this, so it stays on your
    machine — never deployed.
 
 ## 4. Create the tables (once)
@@ -85,7 +85,7 @@ DATABASE_URL=postgresql://...neon...
 REDIS_URL=rediss://...upstash...
 LLM_PROVIDER=groq
 GROQ_API_KEY=gsk_...
-GROQ_MODEL=llama-3.3-70b-versatile
+GROQ_MODEL=openai/gpt-oss-20b
 ```
 
 Then, whenever you want scans to process:
@@ -107,7 +107,7 @@ call; stop it (Ctrl-C) when done. Submitted audits process the moment it's up.
 | `DAILY_AUDIT_LIMIT_PER_IP` |      ✅      |                | `10` for shared demo; `0` = unlimited |
 | `LLM_PROVIDER`             |              |       ✅       | `groq`                                |
 | `GROQ_API_KEY`             |              |       ✅       | Bring-your-own-key; stays local       |
-| `GROQ_MODEL`               |              |       ✅       | `llama-3.3-70b-versatile`             |
+| `GROQ_MODEL`               |              |       ✅       | `openai/gpt-oss-20b`                  |
 | `SCAN_TIMEOUT_MS`          |              |       ✅       | Optional, default `30000`             |
 
 ## Want it fully hosted instead?

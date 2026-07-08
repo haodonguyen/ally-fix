@@ -11,6 +11,7 @@ export const ANALYSIS_SYSTEM_PROMPT = [
   "- fixCode: a concrete, corrected HTML/code snippet based only on the provided markup.",
   "- priority: how urgently it should be fixed (low, medium, or high).",
   "Base your answer only on the HTML provided. The fix is a suggestion the developer must review.",
+  "Respond with a single valid JSON object containing exactly those fields, and nothing else.",
 ].join("\n");
 
 /** Builds the user prompt for a rule group. Pure and deterministic, so it is easy to test. */
