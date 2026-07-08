@@ -1,110 +1,128 @@
 # Deploying AllyFix
 
-This walks through a hosted demo on **Render** (web + worker), with **Neon**
-(Postgres), **Upstash** (Redis), and **Groq** (LLM). It maps directly to
-[`render.yaml`](./render.yaml).
+This deploys a **$0 portfolio demo**: the web app is always online on **Vercel**,
+with **Neon** (Postgres) and **Upstash** (Redis) on their free tiers. The scanner
+worker is **run on demand from your machine** when you want to process scans —
+because a Playwright + Chromium worker can't run for free always-on anywhere.
 
-## Architecture recap
+## How the on-demand model works
 
 ```
-Render Web Service (Next.js)  ──►  Upstash Redis (BullMQ queue)
-        │                                  │
-        │                                  ▼
-        │                      Render Worker (Playwright + axe-core)
-        ▼                                  │
-   Neon Postgres  ◄──────────────── issues + LLM analysis
+Recruiter ──► Vercel (Next.js, always on)
+                   │  enqueues job
+                   ▼
+              Upstash Redis  ◄────────┐
+                   │                  │ your laptop, only while demoing:
+                   ▼                  │   pnpm --filter @ally-fix/worker start:demo
+        (job waits until a worker runs)
+                   │                  │
+                   └──────────────────┘
+                          │ scans with Playwright + axe, writes results
+                          ▼
+                    Neon Postgres ──► Vercel shows the report
 ```
 
-The worker is a **separate, always-on container** because Playwright ships a
-heavy Chromium binary that can't run on serverless.
+- The **web link is always live** — recruiters can open it any time and see the
+  UI, past reports, and the shareable links.
+- A **new scan only completes while your local worker is running**. If nobody's
+  running the worker, a submitted audit sits in `queued` until you start it (then
+  it processes immediately). Start the worker before/during a demo.
 
-## 💸 Cost reality (read first)
-
-- **Web**, **Neon**, **Upstash**, **Groq** all have durable **free** tiers.
-- The **worker is the one paid piece**. Render background workers aren't free
-  (~$7/mo starter), because Chromium must stay running with enough RAM.
-  Alternatives if you want ~$0:
-  - **Fly.io** — a small always-on machine is a few $/mo; free allowance is tight
-    for Chromium but may work for light use.
-  - **Run the worker on demand** — deploy only web + DB + Redis, and run the
-    worker locally (`pnpm --filter @ally-fix/worker start`) when you want to
-    process a scan. Good enough to show recruiters a live scan during a call.
-  - **Record a demo GIF/video** in the README and keep the stack local.
+Everything here is free: Vercel Hobby, Neon free, Upstash free, Groq free.
 
 ## Prerequisites
 
-Accounts (all free to create): [Neon](https://neon.tech),
-[Upstash](https://upstash.com), [Groq](https://console.groq.com),
-[Render](https://render.com), and this GitHub repo.
+Accounts (all free): [Neon](https://neon.tech), [Upstash](https://upstash.com),
+[Groq](https://console.groq.com), [Vercel](https://vercel.com), plus this GitHub repo.
 
 ## 1. Postgres (Neon)
 
-1. Create a project → copy the **pooled** connection string.
-2. It becomes `DATABASE_URL`, e.g.
-   `postgresql://user:pass@ep-xxx.aws.neon.tech/neondb?sslmode=require`.
+1. Create a project → copy the **pooled** connection string → this is `DATABASE_URL`,
+   e.g. `postgresql://user:pass@ep-xxx.aws.neon.tech/neondb?sslmode=require`.
 
 ## 2. Redis (Upstash)
 
-1. Create a Redis database (pick a region near your Render region).
-2. Copy the connection string (starts with `rediss://`) → `REDIS_URL`.
-   BullMQ needs a normal Redis connection, so use the `rediss://...` URL, not the
-   REST API.
+1. Create a Redis database.
+2. Copy the **`rediss://...` TCP connection string** (not the REST API) → `REDIS_URL`.
+   BullMQ needs a real Redis connection.
 
-## 3. Groq key
+## 3. Groq key (for LLM explanations)
 
-1. Create an API key at the Groq console → `GROQ_API_KEY`.
-2. Model default is `llama-3.3-70b-versatile` (already set in `render.yaml`).
+1. Create an API key at the Groq console → `GROQ_API_KEY`. Model default is
+   `llama-3.3-70b-versatile`. Only the worker uses this, so it stays on your
+   machine — never deployed.
 
-## 4. Deploy on Render (Blueprint)
+## 4. Create the tables (once)
 
-1. Render Dashboard → **New → Blueprint** → connect this repo. Render reads
-   `render.yaml` and proposes the two services.
-2. Fill in the `sync: false` env vars when prompted:
-   - Both services: `DATABASE_URL`, `REDIS_URL`.
-   - `allyfix-worker`: `GROQ_API_KEY`.
-   - `allyfix-web`: `NEXT_PUBLIC_APP_URL` (set to the web service URL Render
-     gives you, e.g. `https://allyfix-web.onrender.com`).
-3. Apply. Render builds both Docker images and starts them.
-
-## 5. Run database migrations (once)
-
-The worker image includes `drizzle-kit`. After the first deploy, open the
-**allyfix-worker → Shell** in Render and run:
+Run the migration against Neon from your machine:
 
 ```bash
-pnpm --filter @ally-fix/db db:migrate
+DATABASE_URL="<your-neon-url>" pnpm --filter @ally-fix/db db:migrate
 ```
 
-This creates the `audits` and `issues` tables. (Re-run only after adding new
-migrations.)
+## 5. Deploy the web app to Vercel
 
-## 6. Verify
+1. Vercel → **New Project** → import this repo.
+2. **Root Directory**: `apps/web` (Vercel detects the pnpm workspace and installs
+   from the repo root automatically).
+3. Set environment variables (Production):
+   - `DATABASE_URL` — the Neon URL
+   - `REDIS_URL` — the Upstash `rediss://` URL
+   - `DAILY_AUDIT_LIMIT_PER_IP` — e.g. `10` (per-IP daily cap for the shared demo)
+   - `NEXT_PUBLIC_APP_URL` — your Vercel URL, e.g. `https://ally-fix.vercel.app`
+     (used for shareable report links)
+   > The web app does **not** need `GROQ_API_KEY` — only the worker does.
+4. Deploy. Visit `/api/health` → `{"status":"ok"}`.
 
-- `https://<web-url>/api/health` → `{"status":"ok"}`.
-- Open the web URL, submit a public URL (e.g. `https://www.w3.org`), and watch
-  the report populate. First request may be slow if the free web service was
-  spun down (cold start).
+## 6. Demo: run the worker on demand
+
+Create a local `.env` at the repo root (it's gitignored) pointing at the **cloud**
+services, so your worker drains the same queue the deployed web fills:
+
+```bash
+# .env  (repo root)
+DATABASE_URL=postgresql://...neon...
+REDIS_URL=rediss://...upstash...
+LLM_PROVIDER=groq
+GROQ_API_KEY=gsk_...
+GROQ_MODEL=llama-3.3-70b-versatile
+```
+
+Then, whenever you want scans to process:
+
+```bash
+pnpm --filter @ally-fix/worker start:demo
+```
+
+`start:demo` loads that `.env` automatically. Leave it running during a recruiter
+call; stop it (Ctrl-C) when done. Submitted audits process the moment it's up.
 
 ## Environment variables
 
-| Variable                   | Where        | Notes                                                 |
-| -------------------------- | ------------ | ----------------------------------------------------- |
-| `DATABASE_URL`             | web + worker | Neon pooled connection string                         |
-| `REDIS_URL`                | web + worker | Upstash `rediss://` URL                               |
-| `LLM_PROVIDER`             | worker       | `groq` (default in blueprint)                         |
-| `GROQ_API_KEY`             | worker       | Bring-your-own-key; never committed                   |
-| `GROQ_MODEL`               | worker       | `llama-3.3-70b-versatile`                             |
-| `DAILY_AUDIT_LIMIT_PER_IP` | web          | `10` for the shared demo; `0` = unlimited (self-host) |
-| `NEXT_PUBLIC_APP_URL`      | web          | Public URL, used for shareable links                  |
-| `SCAN_TIMEOUT_MS`          | worker       | Optional, default `30000`                             |
+| Variable                   | Web (Vercel) | Worker (local) | Notes                                 |
+| -------------------------- | :----------: | :------------: | ------------------------------------- |
+| `DATABASE_URL`             |      ✅      |       ✅       | Neon pooled connection string         |
+| `REDIS_URL`                |      ✅      |       ✅       | Upstash `rediss://` URL               |
+| `NEXT_PUBLIC_APP_URL`      |      ✅      |                | Public web URL, for shareable links   |
+| `DAILY_AUDIT_LIMIT_PER_IP` |      ✅      |                | `10` for shared demo; `0` = unlimited |
+| `LLM_PROVIDER`             |              |       ✅       | `groq`                                |
+| `GROQ_API_KEY`             |              |       ✅       | Bring-your-own-key; stays local       |
+| `GROQ_MODEL`               |              |       ✅       | `llama-3.3-70b-versatile`             |
+| `SCAN_TIMEOUT_MS`          |              |       ✅       | Optional, default `30000`             |
+
+## Want it fully hosted instead?
+
+If you'd rather not run the worker by hand, host it as an always-on container
+(e.g. Render/Fly/Railway) using [`apps/worker/Dockerfile`](./apps/worker/Dockerfile),
+with the same env vars. That's a small monthly cost because Chromium needs an
+always-on instance with enough RAM. The whole stack also runs locally with
+`docker compose up` (see [`docker-compose.yml`](./docker-compose.yml)).
 
 ## Troubleshooting
 
-- **Worker OOM / crashes**: bump the worker plan — Chromium needs more than
-  512 MB. This is the usual cause of failed scans on a too-small instance.
-- **Scans stay "queued"**: the worker isn't running or can't reach Redis. Check
-  the worker logs and that `REDIS_URL` matches on both services.
-- **No LLM explanations**: check `GROQ_API_KEY` on the worker; analysis is
+- **Scans stay "queued"**: no worker is running, or it can't reach Redis. Start
+  `start:demo` and confirm `REDIS_URL` matches the web app's.
+- **No LLM explanations**: check `GROQ_API_KEY` in your local `.env`; analysis is
   best-effort, so raw issues still appear without it.
-- **429 "Daily scan limit reached"**: expected once an IP passes
-  `DAILY_AUDIT_LIMIT_PER_IP`. Raise it or set `0` to disable.
+- **429 "Daily scan limit reached"**: expected past `DAILY_AUDIT_LIMIT_PER_IP`.
+  Raise it or set `0` to disable.

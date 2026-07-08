@@ -78,9 +78,12 @@ pnpm db:generate  # generate Drizzle migrations from the schema
 
 ## Deployment
 
-See [`DEPLOY.md`](./DEPLOY.md) for a hosted setup (Render web + worker, Neon
-Postgres, Upstash Redis, Groq), including the [`render.yaml`](./render.yaml)
-blueprint and the per-IP rate limiting used for the shared demo.
+See [`DEPLOY.md`](./DEPLOY.md). The recommended $0 setup keeps the web app always
+online on **Vercel** (with **Neon** Postgres and **Upstash** Redis on free tiers)
+and runs the Playwright worker **on demand** from your machine
+(`pnpm --filter @ally-fix/worker start:demo`) — a Chromium worker can't run for
+free always-on. Per-IP daily rate limiting protects the shared demo. A fully
+hosted, always-on option (Docker worker on Render/Fly) is documented too.
 
 ## Bring your own key
 
