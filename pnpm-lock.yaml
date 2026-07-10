@@ -140,6 +140,10 @@ importers:
       ollama-ai-provider-v2:
         specifier: ^3.6.0
         version: 3.6.0(ai@7.0.16(zod@4.4.3))(zod@4.4.3)
+    devDependencies:
+      '@types/node':
+        specifier: ^26.1.0
+        version: 26.1.0
 
   packages/shared:
     dependencies:

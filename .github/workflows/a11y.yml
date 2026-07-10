@@ -1,0 +1,68 @@
+name: Accessibility
+
+# Dogfooding: AllyFix's own dashboard must pass the same WCAG bar it reports on.
+# Spins up Postgres, seeds a completed audit, builds + starts the web app, then
+# runs axe (WCAG 2.2 A/AA) against the home and report pages. Fails on any violation.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  a11y:
+    name: Dashboard a11y (axe WCAG 2.2 AA)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: allyfix
+          POSTGRES_PASSWORD: allyfix
+          POSTGRES_DB: allyfix
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U allyfix -d allyfix"
+          --health-interval 5s --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: postgres://allyfix:allyfix@localhost:5432/allyfix
+      # The GET-only report path never opens Redis, but the web reads the var lazily.
+      REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+
+      - name: Install Chromium
+        run: pnpm --filter @ally-fix/worker exec playwright install --with-deps chromium
+
+      - name: Run migrations
+        run: pnpm --filter @ally-fix/db db:migrate
+
+      - name: Seed report fixture
+        run: pnpm --filter @ally-fix/worker seed:a11y
+
+      - name: Build web
+        run: pnpm --filter @ally-fix/web build
+
+      - name: Start web and run axe
+        run: |
+          pnpm --filter @ally-fix/web start &
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:3000/api/health && break
+            sleep 2
+          done
+          BASE_URL=http://localhost:3000 pnpm --filter @ally-fix/worker check:a11y

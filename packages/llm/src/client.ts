@@ -12,10 +12,16 @@ import type { IssueGroupInput, LlmClient, LlmConfig } from "./types";
 export type SingleShotGenerate = (args: { system: string; prompt: string }) => Promise<unknown>;
 
 export interface CreateLlmClientOptions {
-  /** Extra attempts after the first, on a validation or provider failure. Default 2. */
+  /** Extra attempts after the first, on a validation or provider failure. Default 3. */
   maxRetries?: number;
+  /** Base backoff between retries in ms; doubles each attempt. Default 800. Set 0 in tests. */
+  retryDelayMs?: number;
   /** Test seam — replaces the real model call. */
   generate?: SingleShotGenerate;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
@@ -39,7 +45,8 @@ export function createLlmClient(
   config: LlmConfig,
   options: CreateLlmClientOptions = {},
 ): LlmClient {
-  const maxRetries = options.maxRetries ?? 2;
+  const maxRetries = options.maxRetries ?? 3;
+  const retryDelayMs = options.retryDelayMs ?? 800;
 
   const generate: SingleShotGenerate =
     options.generate ??
@@ -69,6 +76,11 @@ export function createLlmClient(
           // Don't waste attempts (and quota) on errors that can't succeed on retry,
           // e.g. a 401 for a bad key or a 404 for an unknown model.
           if (!isRetryable(error)) break;
+          // Exponential backoff before the next try — gives rate limits (429,
+          // which are retryable) time to clear their per-minute window.
+          if (attempt < maxRetries && retryDelayMs > 0) {
+            await sleep(retryDelayMs * 2 ** attempt);
+          }
         }
       }
 

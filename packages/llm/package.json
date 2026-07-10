@@ -18,5 +18,8 @@
     "@ally-fix/shared": "workspace:*",
     "ai": "^7.0.16",
     "ollama-ai-provider-v2": "^3.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0"
   }
 }

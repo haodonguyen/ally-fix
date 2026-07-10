@@ -28,7 +28,7 @@ describe("createLlmClient.analyzeIssueGroup", () => {
       .fn()
       .mockResolvedValueOnce({ not: "valid" })
       .mockResolvedValueOnce(validAnalysis);
-    const client = createLlmClient(config, { generate, maxRetries: 2 });
+    const client = createLlmClient(config, { generate, maxRetries: 2, retryDelayMs: 0 });
 
     const result = await client.analyzeIssueGroup({ ruleId: "image-alt", htmlSnippets: ["<img>"] });
 
@@ -38,7 +38,7 @@ describe("createLlmClient.analyzeIssueGroup", () => {
 
   it("throws after exhausting retries", async () => {
     const generate = vi.fn().mockResolvedValue({ still: "invalid" });
-    const client = createLlmClient(config, { generate, maxRetries: 1 });
+    const client = createLlmClient(config, { generate, maxRetries: 1, retryDelayMs: 0 });
 
     await expect(
       client.analyzeIssueGroup({ ruleId: "image-alt", htmlSnippets: ["<img>"] }),
@@ -49,7 +49,7 @@ describe("createLlmClient.analyzeIssueGroup", () => {
   it("does not retry an error the provider marks non-retryable", async () => {
     const authError = Object.assign(new Error("Unauthorized"), { isRetryable: false });
     const generate = vi.fn().mockRejectedValue(authError);
-    const client = createLlmClient(config, { generate, maxRetries: 3 });
+    const client = createLlmClient(config, { generate, maxRetries: 3, retryDelayMs: 0 });
 
     await expect(
       client.analyzeIssueGroup({ ruleId: "image-alt", htmlSnippets: ["<img>"] }),
