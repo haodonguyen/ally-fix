@@ -92,29 +92,53 @@ ally-fix/
   .env.example
 ```
 
-## Getting started
+## Run it locally
 
-Requires Node 22.13+ and pnpm.
+Requires **Node 22.13+**, **pnpm**, and **Docker**.
 
 ```bash
 # 1. Install dependencies
 pnpm install
 
-# 2. Configure environment
-cp .env.example .env    # then fill in values as needed
+# 2. Configure environment (the defaults already match the Docker services below)
+cp .env.example .env
 
-# 3. Start Postgres + Redis + worker + web
-docker compose up
+# 3. Start Postgres + Redis + the worker + the web app
+docker compose up -d
+
+# 4. Create the database tables (run once)
+pnpm db:migrate
 ```
 
-Common scripts:
+Then open **http://localhost:3000**, paste a public URL — try
+`https://www.w3.org/WAI/demos/bad/before/home.html` — and click **Scan**. In a few
+seconds you'll get a report with the accessibility score, a WCAG breakdown, and
+each issue's explanation and code fix.
+
+To stop everything: `docker compose down`.
+
+### AI explanations
+
+The default LLM provider is **Ollama** (local, free). Install it and pull a model
+(`ollama pull llama3.1`), **or** switch to a hosted key in `.env`:
 
 ```bash
-pnpm dev          # run web + worker in watch mode
+LLM_PROVIDER=groq
+GROQ_API_KEY=gsk_...            # from https://console.groq.com
+GROQ_MODEL=openai/gpt-oss-20b
+```
+
+Without a provider, scans still work — issues just won't have AI explanations
+(the analysis step is best-effort and never fails a scan).
+
+### Useful scripts
+
+```bash
 pnpm lint         # ESLint across the monorepo
 pnpm typecheck    # TypeScript, all packages
 pnpm test         # Vitest, all packages
-pnpm db:generate  # generate Drizzle migrations from the schema
+pnpm build        # production build
+pnpm db:generate  # regenerate Drizzle migrations after a schema change
 ```
 
 ## Deployment
