@@ -25,13 +25,23 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Whether an error is worth retrying. Vercel AI SDK provider errors expose an
- * `isRetryable` flag (false for 4xx like a bad key or unknown model); anything
- * without the flag — notably a Zod schema-validation failure — is retryable.
+ * Whether an error is worth retrying. A client error (4xx other than 429 —
+ * bad key, unknown model, malformed request) can't succeed on retry, so we stop
+ * early. Rate limits (429) and everything else — notably a Zod schema-validation
+ * failure with no status — are retryable.
  */
 function isRetryable(error: unknown): boolean {
-  if (error && typeof error === "object" && "isRetryable" in error) {
-    return (error as { isRetryable?: unknown }).isRetryable !== false;
+  if (error && typeof error === "object") {
+    const err = error as { isRetryable?: unknown; statusCode?: unknown };
+    if (err.isRetryable === false) return false;
+    if (
+      typeof err.statusCode === "number" &&
+      err.statusCode >= 400 &&
+      err.statusCode < 500 &&
+      err.statusCode !== 429
+    ) {
+      return false;
+    }
   }
   return true;
 }

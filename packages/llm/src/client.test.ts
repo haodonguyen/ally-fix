@@ -56,4 +56,29 @@ describe("createLlmClient.analyzeIssueGroup", () => {
     ).rejects.toThrow(/failed after/);
     expect(generate).toHaveBeenCalledOnce();
   });
+
+  it("does not retry a non-429 client error (4xx)", async () => {
+    const badRequest = Object.assign(new Error("Bad Request"), { statusCode: 400 });
+    const generate = vi.fn().mockRejectedValue(badRequest);
+    const client = createLlmClient(config, { generate, maxRetries: 3, retryDelayMs: 0 });
+
+    await expect(
+      client.analyzeIssueGroup({ ruleId: "image-alt", htmlSnippets: ["<img>"] }),
+    ).rejects.toThrow(/failed after/);
+    expect(generate).toHaveBeenCalledOnce();
+  });
+
+  it("retries a 429 rate limit", async () => {
+    const rateLimited = Object.assign(new Error("Too Many Requests"), { statusCode: 429 });
+    const generate = vi
+      .fn()
+      .mockRejectedValueOnce(rateLimited)
+      .mockResolvedValueOnce(validAnalysis);
+    const client = createLlmClient(config, { generate, maxRetries: 3, retryDelayMs: 0 });
+
+    const result = await client.analyzeIssueGroup({ ruleId: "image-alt", htmlSnippets: ["<img>"] });
+
+    expect(result.priority).toBe("high");
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
 });
