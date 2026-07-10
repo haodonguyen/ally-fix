@@ -33,7 +33,10 @@ function sleep(ms: number): Promise<void> {
 function isRetryable(error: unknown): boolean {
   if (error && typeof error === "object") {
     const err = error as { isRetryable?: unknown; statusCode?: unknown };
+    // Honor the SDK's explicit signal first — it knows 408/409/425/5xx are worth a retry.
+    if (err.isRetryable === true) return true;
     if (err.isRetryable === false) return false;
+    // No explicit flag: a non-429 client error (4xx) can't succeed on retry.
     if (
       typeof err.statusCode === "number" &&
       err.statusCode >= 400 &&

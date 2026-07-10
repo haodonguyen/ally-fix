@@ -68,6 +68,18 @@ describe("createLlmClient.analyzeIssueGroup", () => {
     expect(generate).toHaveBeenCalledOnce();
   });
 
+  it("retries a 4xx the SDK marks retryable (e.g. 408 timeout)", async () => {
+    const timeout = Object.assign(new Error("Request Timeout"), {
+      statusCode: 408,
+      isRetryable: true,
+    });
+    const generate = vi.fn().mockRejectedValueOnce(timeout).mockResolvedValueOnce(validAnalysis);
+    const client = createLlmClient(config, { generate, maxRetries: 3, retryDelayMs: 0 });
+
+    await client.analyzeIssueGroup({ ruleId: "image-alt", htmlSnippets: ["<img>"] });
+    expect(generate).toHaveBeenCalledTimes(2);
+  });
+
   it("retries a 429 rate limit", async () => {
     const rateLimited = Object.assign(new Error("Too Many Requests"), { statusCode: 429 });
     const generate = vi

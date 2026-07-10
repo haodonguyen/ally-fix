@@ -60,9 +60,13 @@ const worker = new Worker(
       const score = computeAccessibilityScore(scanned.map((issue) => issue.impact));
       await completeAudit(db, auditId, { score });
     } catch (error) {
-      // Log the full error server-side, but store only a safe, generic reason:
-      // the report is public and the raw message can carry internal detail.
-      console.error(`[worker] audit ${auditId} failed:`, error);
+      // Log a string form server-side (not the raw object, which could carry
+      // connection detail in a nested field), but store only a safe generic
+      // reason: the report is public.
+      console.error(
+        `[worker] audit ${auditId} failed:`,
+        error instanceof Error ? (error.stack ?? error.message) : String(error),
+      );
       await failAudit(db, auditId, toPublicError(error));
       throw error; // let BullMQ record the failure too
     }

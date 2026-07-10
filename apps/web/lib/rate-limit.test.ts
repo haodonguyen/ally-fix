@@ -29,26 +29,35 @@ describe("checkAndConsume", () => {
     expect(third.remaining).toBe(0);
   });
 
-  it("sets the daily expiry only on the first hit", async () => {
+  it("re-applies the TTL (idempotent NX) on every hit so keys can't orphan", async () => {
     const redis = fakeRedis();
     await checkAndConsume("1.2.3.4", 5, redis as never);
     await checkAndConsume("1.2.3.4", 5, redis as never);
-    expect(redis.expire).toHaveBeenCalledOnce();
+    expect(redis.expire).toHaveBeenCalledTimes(2);
+    expect(redis.expire).toHaveBeenLastCalledWith(expect.any(String), 86400, "NX");
+  });
+
+  it("fails open (allows) when Redis errors", async () => {
+    const redis = { incr: vi.fn(async () => Promise.reject(new Error("down"))), expire: vi.fn() };
+    const result = await checkAndConsume("1.2.3.4", 2, redis as never);
+    expect(result.allowed).toBe(true);
   });
 });
 
 describe("clientIp", () => {
-  it("takes the first entry of x-forwarded-for", () => {
+  it("prefers x-real-ip (the platform-trusted client IP)", () => {
     const request = new Request("http://x", {
-      headers: { "x-forwarded-for": "203.0.113.7, 10.0.0.1" },
+      headers: { "x-real-ip": "198.51.100.9", "x-forwarded-for": "1.1.1.1, 10.0.0.1" },
     });
-    expect(clientIp(request)).toBe("203.0.113.7");
+    expect(clientIp(request)).toBe("198.51.100.9");
   });
 
-  it("falls back to x-real-ip, then 'unknown'", () => {
-    expect(clientIp(new Request("http://x", { headers: { "x-real-ip": "198.51.100.9" } }))).toBe(
-      "198.51.100.9",
-    );
+  it("falls back to the first x-forwarded-for entry, then 'unknown'", () => {
+    expect(
+      clientIp(
+        new Request("http://x", { headers: { "x-forwarded-for": "203.0.113.7, 10.0.0.1" } }),
+      ),
+    ).toBe("203.0.113.7");
     expect(clientIp(new Request("http://x"))).toBe("unknown");
   });
 });
