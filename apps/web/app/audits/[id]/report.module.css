@@ -25,6 +25,55 @@
   font-size: 0.9rem;
 }
 
+/* --- Slow-scan notice ---------------------------------------------------- */
+.notice {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  border-radius: 0.6rem;
+  padding: 1rem 1.25rem;
+}
+
+.noticeTitle {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+
+.notice p {
+  margin: 0 0 0.85rem;
+  color: #1e3a5f;
+}
+
+.sampleList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.sampleLink {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid #bfdbfe;
+  border-radius: 0.45rem;
+  background: #fff;
+  color: #1e3a5f;
+  text-decoration: none;
+}
+
+.sampleLink:hover {
+  background: #dbeafe;
+}
+
+.sampleLink:focus-visible {
+  outline: 3px solid #1d4ed8;
+  outline-offset: 2px;
+}
+
 /* --- Score --------------------------------------------------------------- */
 .scoreRow {
   display: flex;

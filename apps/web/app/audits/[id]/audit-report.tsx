@@ -38,9 +38,22 @@ interface AuditResponse {
 const TERMINAL: AuditStatus[] = ["completed", "failed"];
 const IMPACT_ORDER: Impact[] = ["critical", "serious", "moderate", "minor"];
 
+// A brand-new scan needs the Playwright worker running. In the hosted demo the
+// worker is on-demand, so if a scan hasn't started after this long, show a
+// notice with ready-made sample reports instead of an endless "queued" spinner.
+const SLOW_SCAN_MS = 20_000;
+
+// Pre-computed reports that are always viewable, even when the worker is offline.
+const SAMPLE_REPORTS = [
+  { id: "117d1422-f8e6-4a87-a6ae-064e4cbcd058", label: "a11yproject.com", score: "100 / 100" },
+  { id: "14b757d5-86c6-4eb6-b376-60c4cd77e700", label: "W3C “before” demo", score: "6 / 100" },
+  { id: "190fbd67-bc34-41b0-8c63-e72ae5557c75", label: "A large e-commerce homepage", score: "5 / 100" },
+];
+
 export function AuditReport({ auditId }: { auditId: string }) {
   const [data, setData] = useState<AuditResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [slowScan, setSlowScan] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -78,6 +91,19 @@ export function AuditReport({ auditId }: { auditId: string }) {
     };
   }, [auditId]);
 
+  // If a scan sits in a non-terminal state too long, the on-demand worker is
+  // likely offline. Keyed on the status string (not `data`) so a fresh object
+  // from each 2s poll doesn't keep resetting the timer.
+  const status = data?.audit.status;
+  useEffect(() => {
+    if (status !== "queued" && status !== "running") {
+      setSlowScan(false);
+      return;
+    }
+    const timer = setTimeout(() => setSlowScan(true), SLOW_SCAN_MS);
+    return () => clearTimeout(timer);
+  }, [status]);
+
   if (loadError) {
     return (
       <p role="alert" style={{ color: "#b00020" }}>
@@ -111,6 +137,8 @@ export function AuditReport({ auditId }: { auditId: string }) {
         <p role="status">Scanning… this page updates automatically when the scan finishes.</p>
       )}
 
+      {scanning && slowScan && <SlowScanNotice />}
+
       {audit.status === "failed" && (
         <p role="alert" style={{ color: "#b00020" }}>
           The scan failed: {audit.error ?? "unknown error"}
@@ -121,6 +149,37 @@ export function AuditReport({ auditId }: { auditId: string }) {
 
       <p className={styles.disclaimer}>{AUTOMATED_SCAN_DISCLAIMER}</p>
     </div>
+  );
+}
+
+/**
+ * Shown when a scan has been pending too long — the on-demand demo worker is
+ * probably asleep. Explains why and points to pre-run reports so a first-time
+ * visitor always sees real output instead of a stuck spinner.
+ */
+function SlowScanNotice() {
+  return (
+    <aside className={styles.notice} aria-labelledby="slow-scan-heading">
+      <h2 id="slow-scan-heading" className={styles.noticeTitle}>
+        This scan is taking a while
+      </h2>
+      <p>
+        Live scans run on a Playwright worker that runs on demand in this free
+        hosted demo, so a brand-new scan finishes only while it’s awake. Your report
+        will appear here automatically if it comes online. In the meantime, here are
+        pre-run reports you can open right away:
+      </p>
+      <ul className={styles.sampleList}>
+        {SAMPLE_REPORTS.map((sample) => (
+          <li key={sample.id}>
+            <a className={styles.sampleLink} href={`/audits/${sample.id}`}>
+              <span>{sample.label}</span>
+              <strong>{sample.score}</strong>
+            </a>
+          </li>
+        ))}
+      </ul>
+    </aside>
   );
 }
 
