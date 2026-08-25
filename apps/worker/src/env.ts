@@ -1,4 +1,4 @@
-import type { LlmConfig, LlmProviderName } from "@ally-fix/llm";
+import type { CreateLlmClientOptions, LlmConfig, LlmProviderName } from "@ally-fix/llm";
 
 /** Reads a required env var, throwing if it is missing or empty. */
 function required(name: string): string {
@@ -17,6 +17,18 @@ function positiveIntEnv(name: string, fallback: number): number {
   if (raw === undefined) return fallback;
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/**
+ * Same, but zero is a meaningful value: for the retry, rate-limit, and circuit
+ * breaker knobs, 0 means "turn this off". Only a negative or unparseable value
+ * falls back to the default.
+ */
+function nonNegativeIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
 }
 
 export const env = {
@@ -57,4 +69,29 @@ export function resolveLlmConfig(): LlmConfig {
         baseUrl: process.env.OLLAMA_BASE_URL ?? "http://localhost:11434",
       };
   }
+}
+
+/**
+ * The outbound failure policy for LLM calls: per-attempt deadline, rate limit,
+ * retry budget, and circuit breaker.
+ *
+ * The rate-limit default is provider-dependent, because the constraint is: a
+ * local Ollama has no quota to protect and throttling it only makes scans slower,
+ * whereas the hosted free tiers enforce requests-per-minute and will 429 a busy
+ * scan. Defaulting to 0 for Ollama and a conservative 30/min for hosted providers
+ * means neither self-hosters nor the demo have to tune anything to work.
+ */
+export function resolveLlmClientOptions(config: LlmConfig): CreateLlmClientOptions {
+  const hostedDefaultRpm = config.provider === "ollama" ? 0 : 30;
+
+  return {
+    // A local model on CPU is genuinely slow, so the deadline is generous — its
+    // job is to catch a hung connection, not to police a slow-but-working model.
+    timeoutMs: positiveIntEnv("LLM_TIMEOUT_MS", 60_000),
+    maxRetries: nonNegativeIntEnv("LLM_MAX_RETRIES", 3),
+    retryDelayMs: nonNegativeIntEnv("LLM_RETRY_BASE_MS", 800),
+    requestsPerMinute: nonNegativeIntEnv("LLM_REQUESTS_PER_MINUTE", hostedDefaultRpm),
+    circuitBreakerThreshold: nonNegativeIntEnv("LLM_BREAKER_THRESHOLD", 5),
+    circuitBreakerResetMs: positiveIntEnv("LLM_BREAKER_RESET_MS", 30_000),
+  };
 }

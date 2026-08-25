@@ -1,23 +1,30 @@
 import { createHash } from "node:crypto";
 import { setAnalysisForRule, type Database } from "@ally-fix/db";
-import { createLlmClient, type LlmClient, type LlmConfig } from "@ally-fix/llm";
+import {
+  CircuitOpenError,
+  MAX_PROMPT_SNIPPETS,
+  type LlmClient,
+  type LlmConfig,
+} from "@ally-fix/llm";
 import { llmIssueAnalysisSchema, type LlmIssueAnalysis } from "@ally-fix/shared";
 import type IORedis from "ioredis";
-import { MAX_PROMPT_SNIPPETS } from "@ally-fix/llm";
 import type { ScannedIssue } from "./scanner";
 
 export interface AnalyzeDeps {
   db: Database;
   redis: IORedis;
+  /** Only used to namespace the cache — the client owns the provider connection. */
   config: LlmConfig;
   cacheTtlSeconds: number;
-  /** Overridable for tests; defaults to a real client built from `config`. */
-  client?: LlmClient;
+  /** Shared across audits, so its rate limiter and breaker see all traffic. */
+  client: LlmClient;
 }
 
 export interface AnalyzeResult {
   analyzed: number;
   failed: number;
+  /** Groups never attempted because the circuit had already opened. */
+  skipped: number;
 }
 
 /**
@@ -33,26 +40,41 @@ export async function analyzeAudit(
   issues: ScannedIssue[],
   deps: AnalyzeDeps,
 ): Promise<AnalyzeResult> {
-  const client = deps.client ?? createLlmClient(deps.config);
-  const groups = groupByRule(issues);
+  const groups = [...groupByRule(issues)];
   let analyzed = 0;
   let failed = 0;
 
-  for (const [ruleId, htmlSnippets] of groups) {
+  for (const [index, [ruleId, htmlSnippets]] of groups.entries()) {
     try {
       const analysis = await getOrGenerate(ruleId, htmlSnippets, deps, () =>
-        client.analyzeIssueGroup({ ruleId, htmlSnippets }),
+        deps.client.analyzeIssueGroup({ ruleId, htmlSnippets }),
       );
       await setAnalysisForRule(deps.db, auditId, ruleId, analysis);
       analyzed++;
     } catch (error) {
+      // An open circuit means the provider is down, not that this rule is
+      // special: abandon the rest of the audit's analysis instead of logging the
+      // same failure once per remaining group.
+      if (isCircuitOpen(error)) {
+        const skipped = groups.length - index;
+        console.warn(
+          `[worker] audit ${auditId}: LLM circuit open, skipping ${skipped} remaining rule group(s)`,
+        );
+        return { analyzed, failed, skipped };
+      }
       failed++;
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[worker] analysis failed for rule "${ruleId}": ${message}`);
     }
   }
 
-  return { analyzed, failed };
+  return { analyzed, failed, skipped: 0 };
+}
+
+/** The client wraps the last failure, so the breaker's signal arrives as a cause. */
+function isCircuitOpen(error: unknown): boolean {
+  if (error instanceof CircuitOpenError) return true;
+  return error instanceof Error && error.cause instanceof CircuitOpenError;
 }
 
 /** Group issues by rule id, keeping up to MAX_PROMPT_SNIPPETS unique HTML snippets each. */
@@ -77,16 +99,40 @@ async function getOrGenerate(
 ): Promise<LlmIssueAnalysis> {
   const key = buildCacheKey(deps.config, ruleId, htmlSnippets);
 
-  const cached = await deps.redis.get(key);
-  if (cached) {
-    const parsed = llmIssueAnalysisSchema.safeParse(JSON.parse(cached));
-    if (parsed.success) return parsed.data;
-    // Corrupt/stale cache entry — fall through and regenerate.
-  }
+  const cached = await readCache(deps.redis, key);
+  if (cached) return cached;
 
   const analysis = await generate();
-  await deps.redis.set(key, JSON.stringify(analysis), "EX", deps.cacheTtlSeconds);
+  // A cache write must never lose an answer we already paid for.
+  try {
+    await deps.redis.set(key, JSON.stringify(analysis), "EX", deps.cacheTtlSeconds);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[worker] could not cache analysis for rule "${ruleId}": ${message}`);
+  }
   return analysis;
+}
+
+/**
+ * Reads a cached analysis, tolerating every way the entry can be unusable:
+ * Redis being down, invalid JSON, or a payload from an older schema version.
+ * Any of those falls through to a fresh generation rather than failing the group.
+ */
+async function readCache(redis: IORedis, key: string): Promise<LlmIssueAnalysis | null> {
+  let cached: string | null;
+  try {
+    cached = await redis.get(key);
+  } catch {
+    return null; // Cache unavailable — degrade to generating.
+  }
+  if (!cached) return null;
+
+  try {
+    const parsed = llmIssueAnalysisSchema.safeParse(JSON.parse(cached));
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null; // Corrupt entry — regenerate.
+  }
 }
 
 /**
