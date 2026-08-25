@@ -5,10 +5,11 @@ import {
   auditJobPayloadSchema,
   computeAccessibilityScore,
 } from "@ally-fix/shared";
+import { createLlmClient } from "@ally-fix/llm";
 import { Worker } from "bullmq";
 import IORedis from "ioredis";
 import { analyzeAudit } from "./analyze";
-import { env, resolveLlmConfig } from "./env";
+import { env, resolveLlmClientOptions, resolveLlmConfig } from "./env";
 import { scanUrl } from "./scanner";
 
 /**
@@ -26,6 +27,9 @@ const connection = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null });
 const cacheRedis = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null });
 const db = createDb(env.DATABASE_URL);
 const llmConfig = resolveLlmConfig();
+// One client for the whole process, not one per job: its rate limiter and circuit
+// breaker are only meaningful if every concurrent audit shares the same instance.
+const llmClient = createLlmClient(llmConfig, resolveLlmClientOptions(llmConfig));
 
 const worker = new Worker(
   AUDIT_QUEUE_NAME,
@@ -52,9 +56,11 @@ const worker = new Worker(
         redis: cacheRedis,
         config: llmConfig,
         cacheTtlSeconds: env.LLM_CACHE_TTL_SECONDS,
+        client: llmClient,
       });
       console.log(
-        `[worker] audit ${auditId}: analysed ${result.analyzed} rule group(s), ${result.failed} failed`,
+        `[worker] audit ${auditId}: analysed ${result.analyzed} rule group(s), ` +
+          `${result.failed} failed, ${result.skipped} skipped`,
       );
 
       const score = computeAccessibilityScore(scanned.map((issue) => issue.impact));

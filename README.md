@@ -64,6 +64,32 @@ binary that cannot run on Vercel's serverless runtime. SSRF protection (blocking
 localhost, private IPs, and cloud metadata) is enforced both at the API and at
 scan time, covering redirects and DNS rebinding.
 
+### Talking to the LLM without trusting it
+
+A third-party model is the least reliable thing in this pipeline: it can be slow,
+rate-limited, down, or simply return the wrong shape. The LLM layer treats each
+of those as a distinct failure with its own response, rather than one generic
+`try/catch`:
+
+| Failure                        | Response                                                                                                             |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| Request hangs                  | Per-attempt deadline aborts it in flight; a race backstops a callee that ignores the signal                          |
+| Free-tier quota                | Token-bucket rate limit **before** the call, so we don't learn the cap by being 429'd                                |
+| Transient 429 / 5xx            | Retry with exponential backoff and **full jitter**, so concurrent workers don't retry in lockstep                    |
+| Bad key, unknown model (4xx)   | Not retried — no amount of waiting fixes it                                                                          |
+| Provider down                  | Circuit breaker opens after N consecutive failures and the rest of the audit fails fast, then one probe re-closes it |
+| Malformed output               | Retried against the Zod schema, but **never** opens the circuit — a bad answer isn't an outage                       |
+| Fenced JSON from a local model | Unwrapped once before validating, turning a guaranteed retry into a hit                                              |
+
+The two axes — _is a retry worth it?_ and _is the provider unhealthy?_ — are
+deliberately separate, because the case that matters most is the one where they
+disagree. Every path above is covered by tests that inject a fake provider; run
+`pnpm test`.
+
+All of it is best-effort by design: the raw axe issues are already in Postgres
+before the first LLM call, so a total provider outage costs the explanations, not
+the scan.
+
 ## Tech stack
 
 - **TypeScript** everywhere, **pnpm** workspaces monorepo.
@@ -72,7 +98,8 @@ scan time, covering redirects and DNS rebinding.
 - **BullMQ** + **Redis** — job queue and LLM result cache.
 - **PostgreSQL** + **Drizzle ORM** — storage (JSONB for raw axe output).
 - **Vercel AI SDK** — provider-agnostic LLM layer (Ollama / Groq / Gemini),
-  structured output validated with **Zod** and retried on failure.
+  structured output validated with **Zod**, behind a timeout / rate-limit /
+  retry / circuit-breaker policy (see Architecture above).
 - **Radix UI** — accessible accordion primitives.
 - **Docker Compose** — run the whole stack with one command.
 - **Vitest** + **GitHub Actions** — tests and CI (lint, typecheck, test) on every PR.
@@ -163,7 +190,8 @@ Built in phases:
 - ✅ **Phase 1** — URL input, SSRF protection, BullMQ + Playwright/axe scan, raw issues in Postgres and UI.
 - ✅ **Phase 2** — provider-agnostic LLM layer (Ollama/Groq/Gemini) with Zod-validated structured
   output, batching by rule, and Redis caching. Analysis is best-effort: a missing LLM provider
-  never fails a scan.
+  never fails a scan. Hardened with a per-attempt timeout, outbound rate limiting, jittered retry,
+  and a circuit breaker.
 - ✅ **Phase 3** — report dashboard: severity-weighted score, WCAG 2.2 breakdown, expandable issues
   (Radix accordion) with copy-fix and shareable link. Dashboard passes axe WCAG 2.2 A/AA with zero violations.
 - ⏳ **Phase 4** — polish (sitemap multi-page, scan comparison, PDF export, embeddable badge).
