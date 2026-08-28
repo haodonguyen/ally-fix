@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "description": "AllyFix \u2014 an open-source accessibility auditor that explains WHY each WCAG issue matters and HOW to fix it, right in your code.",
+  "author": "Hao Do Nguyen",
   "license": "MIT",
   "engines": {
     "node": ">=22.13"
