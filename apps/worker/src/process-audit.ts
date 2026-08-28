@@ -79,7 +79,15 @@ export function createAuditProcessor(deps: ProcessAuditDeps) {
         `[worker] audit ${auditId} failed:`,
         error instanceof Error ? (error.stack ?? error.message) : String(error),
       );
-      await failAudit(deps.db, auditId, toPublicError(error));
+      // The write can fail for the very reason the audit did — a dead database.
+      // Guard it so its rejection cannot replace the original error and skip the
+      // rethrow below, which would leave BullMQ recording the wrong cause.
+      try {
+        await failAudit(deps.db, auditId, toPublicError(error));
+      } catch (writeError) {
+        const message = writeError instanceof Error ? writeError.message : String(writeError);
+        console.error(`[worker] audit ${auditId}: could not record the failure: ${message}`);
+      }
       throw error; // let BullMQ record the failure too
     }
   };

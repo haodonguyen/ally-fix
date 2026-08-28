@@ -13,6 +13,7 @@ export {
   LlmAnalysisError,
   classifyProviderError,
 } from "./errors";
+export type { CircuitOpenReason } from "./errors";
 export { createTokenBucket, noopThrottle } from "./throttle";
 export type { Throttle, TokenBucketOptions } from "./throttle";
 export { createCircuitBreaker, noopCircuitBreaker } from "./circuit-breaker";

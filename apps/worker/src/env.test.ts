@@ -86,6 +86,41 @@ describe("resolveLlmClientOptions", () => {
     });
   });
 
+  it("treats a declared-but-empty variable as unset, not as zero", () => {
+    // `KEY=` in a .env file arrives as "", and Number("") is 0 — which for these
+    // knobs means "disabled". Copying .env.example must not silently switch off
+    // the rate limiter, the retry budget, or the circuit breaker.
+    vi.stubEnv("LLM_REQUESTS_PER_MINUTE", "");
+    vi.stubEnv("LLM_MAX_RETRIES", "");
+    vi.stubEnv("LLM_BREAKER_THRESHOLD", "");
+
+    expect(resolveLlmClientOptions(groq)).toMatchObject({
+      requestsPerMinute: 30,
+      maxRetries: 3,
+      circuitBreakerThreshold: 5,
+    });
+  });
+
+  it("treats a whitespace-only variable as unset too", () => {
+    vi.stubEnv("LLM_REQUESTS_PER_MINUTE", "   ");
+    expect(resolveLlmClientOptions(groq).requestsPerMinute).toBe(30);
+  });
+
+  it("still honours an explicit zero, which really does mean disabled", () => {
+    vi.stubEnv("LLM_REQUESTS_PER_MINUTE", "0");
+    vi.stubEnv("LLM_BREAKER_THRESHOLD", "0");
+
+    expect(resolveLlmClientOptions(groq)).toMatchObject({
+      requestsPerMinute: 0,
+      circuitBreakerThreshold: 0,
+    });
+  });
+
+  it("trims a value that arrived with surrounding whitespace", () => {
+    vi.stubEnv("LLM_REQUESTS_PER_MINUTE", " 12 ");
+    expect(resolveLlmClientOptions(groq).requestsPerMinute).toBe(12);
+  });
+
   it("ignores a garbage value instead of silently disabling a timeout", () => {
     // The trap this guards: Number("30s") is NaN, and a NaN timeout never fires.
     vi.stubEnv("LLM_TIMEOUT_MS", "30s");

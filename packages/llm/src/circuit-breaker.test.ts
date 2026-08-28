@@ -1,9 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
-import { createCircuitBreaker, noopCircuitBreaker } from "./circuit-breaker";
+import { createCircuitBreaker, noopCircuitBreaker, type CircuitBreaker } from "./circuit-breaker";
 import { CircuitOpenError, LlmProviderError, LlmValidationError } from "./errors";
 
 function providerDown() {
   return new LlmProviderError("503 Service Unavailable", true, 503, undefined);
+}
+
+/**
+ * Runs an operation the breaker is expected to refuse, and returns the refusal.
+ * Fails loudly if the call went through, so a breaker that stopped refusing
+ * cannot quietly pass these assertions.
+ */
+async function refusal(breaker: CircuitBreaker): Promise<CircuitOpenError> {
+  try {
+    await breaker.execute(async () => "should not run");
+  } catch (error) {
+    return error as CircuitOpenError;
+  }
+  throw new Error("expected the breaker to refuse the call, but it went through");
 }
 
 /** Mutable clock so `resetTimeoutMs` can be crossed without waiting. */
@@ -148,6 +162,44 @@ describe("createCircuitBreaker", () => {
     releaseProbe("probed");
     await expect(probe).resolves.toBe("probed");
     expect(breaker.state).toBe("closed");
+  });
+
+  it("says which refusal happened, and only promises a wait it can keep", async () => {
+    const clock = clockAt();
+    const breaker = createCircuitBreaker({
+      failureThreshold: 1,
+      resetTimeoutMs: 1000,
+      now: clock.now,
+    });
+
+    await expect(
+      breaker.execute(async () => {
+        throw providerDown();
+      }),
+    ).rejects.toThrow();
+
+    // Open: the wait is knowable, so it is reported.
+    clock.advance(400);
+    const openError = await refusal(breaker);
+    expect(openError.reason).toBe("open");
+    expect(openError.retryAfterMs).toBe(600);
+    expect(openError.message).toContain("is open");
+
+    // Half-open with a probe already out: the wait depends on that probe, so
+    // reporting a duration would be a guess. Previously this path computed a
+    // value that always clamped to 0 and advertised an immediate retry.
+    clock.advance(600);
+    let release: (value: string) => void = () => undefined;
+    const probe = breaker.execute(() => new Promise<string>((resolve) => (release = resolve)));
+
+    const probeError = await refusal(breaker);
+    expect(probeError.reason).toBe("probe-in-flight");
+    expect(probeError.retryAfterMs).toBe(0);
+    expect(probeError.message).toContain("probe is already in flight");
+    expect(probeError.message).not.toContain("~0s");
+
+    release("done");
+    await probe;
   });
 
   it("counts an untyped error as a provider failure (fail closed)", async () => {

@@ -232,6 +232,20 @@ describe("failure handling", () => {
     expect(failAudit.mock.calls[0]?.[2]).toContain("disallowed address");
   });
 
+  it("rethrows the original cause when recording the failure also fails", async () => {
+    // The status write hits the same database that just went down, so it rejects
+    // too. Its rejection must not replace the real error: BullMQ would then
+    // record "db unavailable" for a job that actually failed on the page.
+    failAudit.mockRejectedValue(new Error("db unavailable"));
+    const { process } = build({ scan: vi.fn().mockRejectedValue(new Error("page crashed")) });
+
+    await expect(
+      process({ id: "j-1", data: { auditId: AUDIT_ID, url: "https://example.com" } }),
+    ).rejects.toThrow("page crashed");
+
+    expect(failAudit).toHaveBeenCalled();
+  });
+
   it("fails the audit when the database write fails, not just the scan", async () => {
     insertIssues.mockRejectedValue(new Error('relation "issues" does not exist'));
     const { process } = build({ scan: vi.fn().mockResolvedValue([issue("a", "minor")]) });

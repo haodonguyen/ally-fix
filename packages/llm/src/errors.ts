@@ -71,18 +71,35 @@ export class LlmProviderError extends LlmError {
 }
 
 /**
- * The circuit breaker is open, so the request was rejected without touching the
- * provider. Not retryable (the breaker decides when to try again) and it does
- * not count as a failure — it *is* the breaker's own output.
+ * Why the breaker refused a call. The two cases have genuinely different
+ * answers to "when may I try again?", so they are not collapsed: an open circuit
+ * knows the wait, whereas a half-open circuit with a probe already in flight
+ * cannot know until that probe resolves.
+ */
+export type CircuitOpenReason = "open" | "probe-in-flight";
+
+/**
+ * The circuit breaker rejected the request without touching the provider. Not
+ * retryable (the breaker decides when to try again) and it does not count as a
+ * failure — it *is* the breaker's own output.
  */
 export class CircuitOpenError extends LlmError {
   readonly retryable = false;
   readonly tripsBreaker = false;
 
-  constructor(readonly retryAfterMs: number) {
+  /** Milliseconds until the next probe window. Meaningful only when reason is "open". */
+  readonly retryAfterMs: number;
+
+  constructor(
+    readonly reason: CircuitOpenReason,
+    retryAfterMs = 0,
+  ) {
     super(
-      `LLM circuit breaker is open; skipping the call (retrying in ~${Math.ceil(retryAfterMs / 1000)}s)`,
+      reason === "probe-in-flight"
+        ? "LLM circuit breaker is half-open and a probe is already in flight; skipping the call"
+        : `LLM circuit breaker is open; skipping the call (retrying in ~${Math.ceil(retryAfterMs / 1000)}s)`,
     );
+    this.retryAfterMs = reason === "open" ? retryAfterMs : 0;
     this.name = "CircuitOpenError";
   }
 }

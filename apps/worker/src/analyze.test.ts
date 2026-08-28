@@ -306,7 +306,7 @@ describe("analyzeAudit — circuit breaker", () => {
       analyzeIssueGroup: vi
         .fn()
         .mockRejectedValueOnce(new LlmAnalysisError(4, new Error("ECONNREFUSED")))
-        .mockRejectedValue(new LlmAnalysisError(1, new CircuitOpenError(30_000))),
+        .mockRejectedValue(new LlmAnalysisError(1, new CircuitOpenError("open", 30_000))),
     };
     const issues = [
       issue("image-alt", "<img>"),
@@ -324,7 +324,9 @@ describe("analyzeAudit — circuit breaker", () => {
   });
 
   it("recognises a bare CircuitOpenError as well as a wrapped one", async () => {
-    const client = { analyzeIssueGroup: vi.fn().mockRejectedValue(new CircuitOpenError(30_000)) };
+    const client = {
+      analyzeIssueGroup: vi.fn().mockRejectedValue(new CircuitOpenError("open", 30_000)),
+    };
 
     const result = await analyzeAudit(
       "audit-1",

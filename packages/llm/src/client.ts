@@ -83,13 +83,20 @@ async function withTimeout<T>(
       reject(new LlmTimeoutError(timeoutMs));
     }, timeoutMs);
   });
-
-  const running = operation(controller.signal);
-  // The loser of the race still settles; swallow a late rejection so it doesn't
-  // surface as an unhandled rejection. The race itself still sees the original.
-  running.catch(() => undefined);
+  // If the race below never observes it (the operation threw synchronously) the
+  // timer is cleared in `finally`, but attach a sink so a rejection that is
+  // already queued cannot escape as an unhandled rejection.
+  deadline.catch(() => undefined);
 
   try {
+    // Invoked inside the try so that an implementation which throws *synchronously*
+    // still reaches the finally below. Outside it, the timer would leak and the
+    // unawaited `deadline` would later reject with no handler — an unhandled
+    // rejection, which terminates the process under Node's default.
+    const running = operation(controller.signal);
+    // The loser of the race still settles; swallow a late rejection so it doesn't
+    // surface as an unhandled rejection. The race itself still sees the original.
+    running.catch(() => undefined);
     return await Promise.race([running, deadline]);
   } catch (error) {
     // The callee honored the abort and threw its own error (AbortError, or a

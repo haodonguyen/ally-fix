@@ -61,11 +61,19 @@ describe("getDb", () => {
     expect(createDb).toHaveBeenCalledOnce();
   });
 
-  it("does not read the environment until it is called", () => {
-    // Importing the module with no env set must not have thrown — reaching this
-    // line at all is the assertion.
-    vi.stubEnv("DATABASE_URL", "postgres://localhost:5432/db");
-    expect(() => getDb()).not.toThrow();
+  it("does not read the environment at import time", async () => {
+    // The property under test is what lets `next build` run on a machine with no
+    // database. Asserting it needs a *fresh* import with the variable unset —
+    // calling getDb() after stubbing a valid URL would pass either way, even if
+    // the module read process.env eagerly at module scope.
+    vi.resetModules();
+    vi.stubEnv("DATABASE_URL", "");
+
+    const fresh = await import("./db");
+
+    expect(createDb).not.toHaveBeenCalled();
+    // ...and the error appears only when a client is actually asked for.
+    expect(() => fresh.getDb()).toThrow(/DATABASE_URL/);
   });
 });
 
