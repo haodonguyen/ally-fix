@@ -7,6 +7,7 @@ import {
   type LlmConfig,
 } from "@ally-fix/llm";
 import { llmIssueAnalysisSchema, type LlmIssueAnalysis } from "@ally-fix/shared";
+import type { Logger } from "@ally-fix/shared/logger";
 import type IORedis from "ioredis";
 import type { ScannedIssue } from "./scanner";
 
@@ -18,6 +19,8 @@ export interface AnalyzeDeps {
   cacheTtlSeconds: number;
   /** Shared across audits, so its rate limiter and breaker see all traffic. */
   client: LlmClient;
+  /** Already carrying the audit id, so per-rule lines stay correlated. */
+  logger: Logger;
 }
 
 export interface AnalyzeResult {
@@ -57,14 +60,15 @@ export async function analyzeAudit(
       // same failure once per remaining group.
       if (isCircuitOpen(error)) {
         const skipped = groups.length - index;
-        console.warn(
-          `[worker] audit ${auditId}: LLM circuit open, skipping ${skipped} remaining rule group(s)`,
-        );
+        deps.logger.warn("LLM circuit open, abandoning remaining analysis", {
+          skipped,
+          analyzed,
+          failed,
+        });
         return { analyzed, failed, skipped };
       }
       failed++;
-      const message = error instanceof Error ? error.message : String(error);
-      console.error(`[worker] analysis failed for rule "${ruleId}": ${message}`);
+      deps.logger.warn("rule analysis failed", { ruleId, err: error });
     }
   }
 
@@ -107,8 +111,7 @@ async function getOrGenerate(
   try {
     await deps.redis.set(key, JSON.stringify(analysis), "EX", deps.cacheTtlSeconds);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`[worker] could not cache analysis for rule "${ruleId}": ${message}`);
+    deps.logger.warn("could not cache analysis", { ruleId, err: error });
   }
   return analysis;
 }

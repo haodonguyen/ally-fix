@@ -29,6 +29,8 @@ export default defineConfig({
 
       exclude: [
         "**/*.test.ts",
+        // Test scaffolding, not shipped behaviour.
+        "**/testing/**",
         // Barrel files: re-exports with no behaviour to cover.
         "packages/*/src/index.ts",
         // Table and column declarations, not logic.

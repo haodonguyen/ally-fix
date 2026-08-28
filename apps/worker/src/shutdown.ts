@@ -11,6 +11,8 @@
  * anyway with less control — better to give up on our own terms and let the
  * reaper recover whatever did not finish.
  */
+import type { Logger } from "@ally-fix/shared/logger";
+
 export interface ShutdownDeps {
   /** Stops accepting jobs and resolves once in-flight work settles. */
   closeWorker: () => Promise<unknown>;
@@ -19,7 +21,7 @@ export interface ShutdownDeps {
   /** How long to wait for in-flight work before exiting anyway. */
   graceMs: number;
   exit: (code: number) => void;
-  onLog?: (message: string) => void;
+  logger: Logger;
 }
 
 /** Rejects after `ms`, so a hung close cannot outlast the platform's own timer. */
@@ -33,27 +35,28 @@ function deadline(ms: number): { promise: Promise<never>; cancel: () => void } {
 }
 
 export function createShutdownHandler(deps: ShutdownDeps) {
-  const log = deps.onLog ?? ((message: string) => console.log(message));
   let shuttingDown = false;
 
   return async function shutdown(signal: string): Promise<void> {
     // A second Ctrl-C from an impatient operator means "stop waiting", not
     // "start a second shutdown".
     if (shuttingDown) {
-      log(`[worker] ${signal} received again — exiting immediately`);
+      deps.logger.warn("signal received again, exiting immediately", { signal });
       deps.exit(1);
       return;
     }
     shuttingDown = true;
-    log(`[worker] ${signal} received, finishing in-flight scans…`);
+    deps.logger.info("shutdown started, finishing in-flight scans", {
+      signal,
+      graceMs: deps.graceMs,
+    });
 
     const timer = deadline(deps.graceMs);
     try {
       await Promise.race([deps.closeWorker(), timer.promise]);
-      log("[worker] in-flight scans finished");
+      deps.logger.info("in-flight scans finished");
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      log(`[worker] shutting down without a clean stop: ${message}`);
+      deps.logger.warn("shutting down without a clean stop", { err: error });
     } finally {
       timer.cancel();
     }
@@ -62,8 +65,7 @@ export function createShutdownHandler(deps: ShutdownDeps) {
       await deps.closeConnections();
     } catch (error) {
       // Nothing useful is left to do about it; we are exiting either way.
-      const message = error instanceof Error ? error.message : String(error);
-      log(`[worker] could not close connections cleanly: ${message}`);
+      deps.logger.warn("could not close connections cleanly", { err: error });
     }
 
     deps.exit(0);

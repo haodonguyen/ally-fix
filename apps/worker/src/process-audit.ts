@@ -8,6 +8,7 @@ import {
 import type { NewIssueRow } from "@ally-fix/db";
 import { auditJobPayloadSchema, computeAccessibilityScore } from "@ally-fix/shared";
 import type { LlmClient, LlmConfig } from "@ally-fix/llm";
+import type { Logger } from "@ally-fix/shared/logger";
 import type IORedis from "ioredis";
 import { analyzeAudit } from "./analyze";
 import { toPublicError } from "./public-error";
@@ -30,6 +31,9 @@ export interface ProcessAuditDeps {
   cacheTtlSeconds: number;
   /** Injected so tests don't need a browser. */
   scan: (url: string, timeoutMs: number) => Promise<ScannedIssue[]>;
+  logger: Logger;
+  /** Injectable clock, so durations are assertable. */
+  now?: () => number;
 }
 
 /** The shape BullMQ hands the processor. Narrowed to what we actually read. */
@@ -42,51 +46,69 @@ export function createAuditProcessor(deps: ProcessAuditDeps) {
   return async function processAudit(job: AuditJob): Promise<void> {
     // Validate the job shape defensively — a malformed job must not throw an
     // unhandled error, and there's no audit row to fail if we can't read its id.
+    const now = deps.now ?? Date.now;
+    const startedAt = now();
+
     const parsed = auditJobPayloadSchema.safeParse(job.data);
     if (!parsed.success) {
-      console.error(`[worker] discarding malformed job ${job.id}: ${parsed.error.message}`);
+      deps.logger.error("discarding malformed job", {
+        jobId: job.id,
+        reason: parsed.error.message,
+      });
       return;
     }
     const { auditId, url } = parsed.data;
+    // Every line below is tagged with the audit, which is the only question
+    // anyone asks of these logs: what happened to *this* scan?
+    const log = deps.logger.child({ auditId, jobId: job.id });
 
     try {
+      log.info("scan started", { url });
       await markAuditRunning(deps.db, auditId);
+
+      const scanStartedAt = now();
       const scanned = await deps.scan(url, deps.scanTimeoutMs);
+      const scanMs = now() - scanStartedAt;
+      log.info("scan finished", { scanMs, issues: scanned.length });
+
       const rows: NewIssueRow[] = scanned.map((issue) => ({ auditId, ...issue }));
       await insertIssues(deps.db, rows);
 
       // Phase 2: enrich issues with LLM explanations + fixes. Best-effort — the
       // raw issues are already saved, so this never fails the audit.
+      const analysisStartedAt = now();
       const result = await analyzeAudit(auditId, scanned, {
         db: deps.db,
         redis: deps.cacheRedis,
         config: deps.llmConfig,
         cacheTtlSeconds: deps.cacheTtlSeconds,
         client: deps.llmClient,
+        logger: log,
       });
-      console.log(
-        `[worker] audit ${auditId}: analysed ${result.analyzed} rule group(s), ` +
-          `${result.failed} failed, ${result.skipped} skipped`,
-      );
+      log.info("analysis finished", {
+        analysisMs: now() - analysisStartedAt,
+        provider: deps.llmConfig.provider,
+        model: deps.llmConfig.model,
+        ...result,
+      });
 
       const score = computeAccessibilityScore(scanned.map((issue) => issue.impact));
       await completeAudit(deps.db, auditId, { score });
+      log.info("audit completed", { score, issues: scanned.length, totalMs: now() - startedAt });
     } catch (error) {
       // Log a string form server-side (not the raw object, which could carry
       // connection detail in a nested field), but store only a safe generic
       // reason: the report is public.
-      console.error(
-        `[worker] audit ${auditId} failed:`,
-        error instanceof Error ? (error.stack ?? error.message) : String(error),
-      );
+      // The full error goes to the logs (where it is scrubbed of credentials);
+      // only a generic reason is stored, because the report page is public.
+      log.error("audit failed", { totalMs: now() - startedAt, err: error });
       // The write can fail for the very reason the audit did — a dead database.
       // Guard it so its rejection cannot replace the original error and skip the
       // rethrow below, which would leave BullMQ recording the wrong cause.
       try {
         await failAudit(deps.db, auditId, toPublicError(error));
       } catch (writeError) {
-        const message = writeError instanceof Error ? writeError.message : String(writeError);
-        console.error(`[worker] audit ${auditId}: could not record the failure: ${message}`);
+        log.error("could not record the failure", { err: writeError });
       }
       throw error; // let BullMQ record the failure too
     }

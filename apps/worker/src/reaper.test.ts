@@ -4,6 +4,7 @@ const { failStaleRunningAudits } = vi.hoisted(() => ({ failStaleRunningAudits: v
 vi.mock("@ally-fix/db", () => ({ failStaleRunningAudits }));
 
 import { STALE_AUDIT_REASON, startReaper, sweepStaleAudits, type ReaperDeps } from "./reaper";
+import { createFakeLogger } from "./testing/fake-logger";
 
 const NOW = 1_700_000_000_000;
 
@@ -12,6 +13,7 @@ function deps(overrides: Partial<ReaperDeps> = {}): ReaperDeps {
     db: {} as ReaperDeps["db"],
     staleAfterMs: 15 * 60_000,
     intervalMs: 5 * 60_000,
+    logger: createFakeLogger().logger,
     now: () => NOW,
     ...overrides,
   };
@@ -20,8 +22,6 @@ function deps(overrides: Partial<ReaperDeps> = {}): ReaperDeps {
 beforeEach(() => {
   vi.clearAllMocks();
   failStaleRunningAudits.mockResolvedValue(0);
-  vi.spyOn(console, "warn").mockImplementation(() => undefined);
-  vi.spyOn(console, "error").mockImplementation(() => undefined);
 });
 
 describe("sweepStaleAudits", () => {
@@ -39,8 +39,22 @@ describe("sweepStaleAudits", () => {
   });
 
   it("stays quiet when there is nothing to recover", async () => {
-    await sweepStaleAudits(deps());
-    expect(console.warn).not.toHaveBeenCalled();
+    const captured = createFakeLogger();
+    await sweepStaleAudits(deps({ logger: captured.logger }));
+    expect(captured.records).toHaveLength(0);
+  });
+
+  it("says how many it recovered, and after how long they were considered stale", async () => {
+    failStaleRunningAudits.mockResolvedValue(2);
+    const captured = createFakeLogger();
+
+    await sweepStaleAudits(deps({ logger: captured.logger, staleAfterMs: 900_000 }));
+
+    expect(captured.first("recovered abandoned audits")).toMatchObject({
+      level: "warn",
+      swept: 2,
+      staleAfterMs: 900_000,
+    });
   });
 
   it("never throws when the database is unhappy", async () => {
@@ -48,8 +62,14 @@ describe("sweepStaleAudits", () => {
     // must not be the thing that takes the worker down.
     failStaleRunningAudits.mockRejectedValue(new Error("connection refused"));
 
-    await expect(sweepStaleAudits(deps())).resolves.toBe(0);
-    expect(console.error).toHaveBeenCalled();
+    const captured = createFakeLogger();
+
+    await expect(sweepStaleAudits(deps({ logger: captured.logger }))).resolves.toBe(0);
+
+    expect(captured.first("stale-audit sweep failed")).toMatchObject({
+      level: "error",
+      err: { message: "connection refused" },
+    });
   });
 });
 
