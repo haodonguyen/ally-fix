@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { backoffDelay, coerceRawOutput, createLlmClient } from "./client";
 import { createCircuitBreaker } from "./circuit-breaker";
 import { CircuitOpenError, LlmProviderError, LlmTimeoutError, LlmValidationError } from "./errors";
+import type { SingleShotGenerate } from "./client";
 import type { Throttle } from "./throttle";
 import type { LlmConfig } from "./types";
 
@@ -233,6 +234,41 @@ describe("per-attempt timeout", () => {
 
     await expect(client.analyzeIssueGroup(group)).resolves.toEqual(validAnalysis);
     expect(generate).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears the deadline timer when the provider throws synchronously", async () => {
+    vi.useFakeTimers();
+    try {
+      // A `generate` that throws instead of returning a rejected promise. If the
+      // call sits outside withTimeout's try block, `finally` never runs and this
+      // 30s timer stays armed for the life of the process.
+      const generate = (() => {
+        throw new Error("bad argument");
+      }) as unknown as SingleShotGenerate;
+      const client = createLlmClient(config, {
+        ...fast,
+        generate,
+        timeoutMs: 30_000,
+        maxRetries: 0,
+      });
+
+      await expect(client.analyzeIssueGroup(group)).rejects.toThrow(/failed after 1 attempt/);
+
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("classifies a synchronous throw as a provider error, not a crash", async () => {
+    const generate = (() => {
+      throw new Error("bad argument");
+    }) as unknown as SingleShotGenerate;
+    const client = createLlmClient(config, { ...fast, generate, maxRetries: 0 });
+
+    await expect(client.analyzeIssueGroup(group)).rejects.toMatchObject({
+      cause: expect.any(LlmProviderError),
+    });
   });
 
   it("does not arm a deadline when the timeout is disabled", async () => {

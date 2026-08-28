@@ -65,8 +65,13 @@ export function createCircuitBreaker(options: CircuitBreakerOptions): CircuitBre
     async execute<T>(operation: () => Promise<T>): Promise<T> {
       const state = currentState();
 
-      if (state === "open" || (state === "half-open" && probing)) {
-        throw new CircuitOpenError(Math.max(0, resetTimeoutMs - (now() - openedAt)));
+      if (state === "half-open" && probing) {
+        // A probe is already out; piling on defeats the point of probing once.
+        // How long to wait is not knowable here — it depends on that probe.
+        throw new CircuitOpenError("probe-in-flight");
+      }
+      if (state === "open") {
+        throw new CircuitOpenError("open", Math.max(0, resetTimeoutMs - (now() - openedAt)));
       }
 
       const isProbe = state === "half-open";

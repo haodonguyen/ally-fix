@@ -29,7 +29,7 @@ describe("error taxonomy", () => {
   });
 
   it("never lets an open circuit retry or count against itself", () => {
-    const error = new CircuitOpenError(30_000);
+    const error = new CircuitOpenError("open", 30_000);
     expect(error.retryable).toBe(false);
     expect(error.tripsBreaker).toBe(false);
     expect(error.message).toContain("30s");
@@ -49,7 +49,7 @@ describe("error taxonomy", () => {
       new LlmTimeoutError(1),
       new LlmValidationError("x", undefined),
       new LlmProviderError("x", true, 500, undefined),
-      new CircuitOpenError(1),
+      new CircuitOpenError("open", 1),
       new LlmAnalysisError(1, undefined),
     ]) {
       expect(error).toBeInstanceOf(LlmError);

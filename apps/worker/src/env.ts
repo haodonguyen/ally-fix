@@ -8,12 +8,25 @@ function required(name: string): string {
 }
 
 /**
+ * Reads an env var, treating "declared but empty" as absent.
+ *
+ * `KEY=` in a .env file arrives as an empty string, not as undefined, and
+ * `Number("")` is 0 — so a blank line would otherwise be read as a deliberate
+ * zero. For the knobs below zero means "turn this off", which would silently
+ * disable a protection that the caller only meant to leave at its default.
+ */
+function rawEnv(name: string): string | undefined {
+  const raw = process.env[name]?.trim();
+  return raw ? raw : undefined;
+}
+
+/**
  * Reads a positive-integer env var. Falls back to `fallback` when unset OR when
  * the value isn't a finite positive number — plain `Number(x ?? d)` would let a
  * value like "30s" through as NaN, which silently disables timeouts / TTLs.
  */
 function positiveIntEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
+  const raw = rawEnv(name);
   if (raw === undefined) return fallback;
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -25,7 +38,7 @@ function positiveIntEnv(name: string, fallback: number): number {
  * falls back to the default.
  */
 function nonNegativeIntEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
+  const raw = rawEnv(name);
   if (raw === undefined) return fallback;
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
