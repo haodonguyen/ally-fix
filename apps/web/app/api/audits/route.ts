@@ -3,6 +3,7 @@ import { createAuditRequestSchema } from "@ally-fix/shared";
 import { NextResponse } from "next/server";
 import { assertUrlIsSafe } from "@ally-fix/shared/ssrf";
 import { getDb } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { enqueueAudit } from "@/lib/queue";
 import { checkAndConsume, clientIp } from "@/lib/rate-limit";
 
@@ -48,7 +49,7 @@ export async function POST(request: Request): Promise<Response> {
   try {
     await enqueueAudit({ auditId: audit.id, url: safe.url });
   } catch (error) {
-    console.error(`[api] could not queue audit ${audit.id}:`, error);
+    logger.error("could not queue audit", { auditId: audit.id, err: error });
     await failAudit(db, audit.id, "The scan could not be queued. Please try again.").catch(
       () => undefined,
     );
@@ -58,5 +59,6 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
+  logger.info("audit queued", { auditId: audit.id, url: safe.url });
   return NextResponse.json({ auditId: audit.id }, { status: 201 });
 }

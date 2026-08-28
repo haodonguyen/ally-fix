@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray, lt } from "drizzle-orm";
+import { and, asc, eq, inArray, lt, sql } from "drizzle-orm";
 import type { LlmIssueAnalysis } from "@ally-fix/shared";
 import type { Database } from "./client";
 import { audits, issues, type AuditRow, type IssueRow, type NewIssueRow } from "./schema";
@@ -106,4 +106,14 @@ export async function failStaleRunningAudits(
     )
     .returning({ id: audits.id });
   return swept.length;
+}
+
+/**
+ * Cheapest possible round-trip that proves the connection actually works.
+ *
+ * Lives here rather than in the caller so the readiness probe does not need a
+ * direct dependency on drizzle — the db package owns every statement we send.
+ */
+export async function pingDatabase(db: Database): Promise<void> {
+  await db.execute(sql`select 1`);
 }

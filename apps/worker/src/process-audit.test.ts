@@ -22,6 +22,7 @@ vi.mock("@ally-fix/db", () => ({
 
 import { createAuditProcessor, type ProcessAuditDeps } from "./process-audit";
 import type { ScannedIssue } from "./scanner";
+import { createFakeLogger, type CapturedLogger } from "./testing/fake-logger";
 
 const AUDIT_ID = "3f1a9c22-7b4e-4d51-9a2c-8e6f0b1d4a77";
 const config: LlmConfig = { provider: "ollama", model: "llama3.1" };
@@ -49,9 +50,12 @@ function fakeRedis() {
   return { get: vi.fn(async () => null), set: vi.fn(async () => "OK") } as unknown as IORedis;
 }
 
+let clock = 0;
+
 function build(overrides: Partial<ProcessAuditDeps> = {}) {
   const scan = vi.fn<ProcessAuditDeps["scan"]>().mockResolvedValue([]);
   const llmClient: LlmClient = { analyzeIssueGroup: vi.fn().mockResolvedValue(analysis) };
+  const captured: CapturedLogger = createFakeLogger();
   const deps: ProcessAuditDeps = {
     db: {} as ProcessAuditDeps["db"],
     cacheRedis: fakeRedis(),
@@ -60,6 +64,9 @@ function build(overrides: Partial<ProcessAuditDeps> = {}) {
     scanTimeoutMs: 30_000,
     cacheTtlSeconds: 3600,
     scan,
+    logger: captured.logger,
+    // A clock that advances 10ms per read, so durations are deterministic.
+    now: () => (clock += 10),
     ...overrides,
   };
   // Return the deps actually in use, not the locals — an override must be what
@@ -68,18 +75,17 @@ function build(overrides: Partial<ProcessAuditDeps> = {}) {
     process: createAuditProcessor(deps),
     scan: deps.scan as ReturnType<typeof vi.fn>,
     llmClient: deps.llmClient,
+    captured,
     deps,
   };
 }
 
 beforeEach(() => {
+  clock = 0;
   vi.clearAllMocks();
   for (const fn of [markAuditRunning, insertIssues, completeAudit, failAudit, setAnalysisForRule]) {
     fn.mockResolvedValue(undefined);
   }
-  vi.spyOn(console, "log").mockImplementation(() => undefined);
-  vi.spyOn(console, "error").mockImplementation(() => undefined);
-  vi.spyOn(console, "warn").mockImplementation(() => undefined);
 });
 
 describe("malformed jobs", () => {
@@ -255,5 +261,89 @@ describe("failure handling", () => {
     ).rejects.toThrow();
 
     expect(failAudit).toHaveBeenCalled();
+  });
+});
+
+describe("what the logs say", () => {
+  it("tags every line with the audit, so one scan can be traced end to end", async () => {
+    const { process, captured } = build({
+      scan: vi.fn().mockResolvedValue([issue("image-alt", "critical")]),
+    });
+
+    await process({ id: "j-1", data: { auditId: AUDIT_ID, url: "https://example.com" } });
+
+    // This is the whole point: "what happened to THIS audit?" must be answerable
+    // by filtering on one field.
+    const correlated = captured.records.filter((r) => r.auditId === AUDIT_ID);
+    expect(correlated.length).toBeGreaterThanOrEqual(4);
+    expect(correlated.map((r) => r.msg)).toEqual(
+      expect.arrayContaining([
+        "scan started",
+        "scan finished",
+        "analysis finished",
+        "audit completed",
+      ]),
+    );
+  });
+
+  it("records timings and outcome, not just that something happened", async () => {
+    const { process, captured } = build({
+      scan: vi.fn().mockResolvedValue([issue("image-alt", "critical"), issue("label", "minor")]),
+    });
+
+    await process({ id: "j-1", data: { auditId: AUDIT_ID, url: "https://example.com" } });
+
+    expect(captured.first("scan finished")).toMatchObject({
+      issues: 2,
+      scanMs: expect.any(Number),
+    });
+    expect(captured.first("audit completed")).toMatchObject({
+      score: expect.any(Number),
+      issues: 2,
+      totalMs: expect.any(Number),
+    });
+  });
+
+  it("reports which provider and model did the analysis", async () => {
+    const { process, captured } = build({
+      scan: vi.fn().mockResolvedValue([issue("image-alt", "critical")]),
+    });
+
+    await process({ id: "j-1", data: { auditId: AUDIT_ID, url: "https://example.com" } });
+
+    expect(captured.first("analysis finished")).toMatchObject({
+      provider: "ollama",
+      model: "llama3.1",
+      analyzed: 1,
+      failed: 0,
+      skipped: 0,
+    });
+  });
+
+  it("logs the full error even though the stored reason is generic", async () => {
+    const { process, captured } = build({
+      scan: vi.fn().mockRejectedValue(new Error("net::ERR_NAME_NOT_RESOLVED at nowhere.example")),
+    });
+
+    await expect(
+      process({ id: "j-1", data: { auditId: AUDIT_ID, url: "https://example.com" } }),
+    ).rejects.toThrow();
+
+    // The public report gets a generic sentence; the logs must keep the detail
+    // that makes the failure diagnosable.
+    const logged = captured.first("audit failed");
+    expect(logged).toMatchObject({ auditId: AUDIT_ID, level: "error" });
+    expect((logged?.err as { message: string }).message).toContain("ERR_NAME_NOT_RESOLVED");
+    expect(failAudit.mock.calls[0]?.[2]).not.toContain("ERR_NAME_NOT_RESOLVED");
+  });
+
+  it("names a malformed job without inventing an audit id it does not have", async () => {
+    const { process, captured } = build();
+
+    await process({ id: "j-9", data: { nonsense: true } });
+
+    const logged = captured.first("discarding malformed job");
+    expect(logged).toMatchObject({ jobId: "j-9", level: "error" });
+    expect(logged).not.toHaveProperty("auditId");
   });
 });

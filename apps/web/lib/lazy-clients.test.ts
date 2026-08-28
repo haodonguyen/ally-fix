@@ -18,6 +18,10 @@ const { createDb, IORedisCtor, QueueCtor, add } = vi.hoisted(() => ({
 vi.mock("@ally-fix/db", () => ({ createDb }));
 vi.mock("ioredis", () => ({ default: IORedisCtor }));
 vi.mock("bullmq", () => ({ Queue: QueueCtor }));
+// The module-level logger writes to stdout; silence it so test output stays readable.
+vi.mock("./logger", () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() },
+}));
 
 import { getDb } from "./db";
 import { getRedis } from "./redis";

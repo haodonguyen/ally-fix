@@ -1,4 +1,5 @@
 import IORedis from "ioredis";
+import { logger } from "./logger";
 
 /**
  * Per-IP daily rate limit for the hosted demo (which shares one LLM key). A limit
@@ -56,8 +57,7 @@ export async function checkAndConsume(
   } catch (error) {
     // Fail open: a rate-limiter outage shouldn't block scans. The queue enqueue
     // shares the same Redis, so a genuine outage stops work regardless.
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`[rate-limit] Redis error, allowing request: ${message}`);
+    logger.warn("rate limiter unavailable, allowing request", { err: error });
     return { allowed: true, limit, remaining: limit };
   }
 }

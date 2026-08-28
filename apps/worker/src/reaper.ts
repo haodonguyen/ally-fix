@@ -1,4 +1,5 @@
 import { failStaleRunningAudits, type Database } from "@ally-fix/db";
+import type { Logger } from "@ally-fix/shared/logger";
 
 /**
  * Recovers audits orphaned by a worker that died mid-scan.
@@ -19,6 +20,7 @@ export interface ReaperDeps {
   staleAfterMs: number;
   /** How often to sweep after the initial pass. */
   intervalMs: number;
+  logger: Logger;
   now?: () => number;
 }
 
@@ -29,14 +31,13 @@ export async function sweepStaleAudits(deps: ReaperDeps): Promise<number> {
   try {
     const swept = await failStaleRunningAudits(deps.db, cutoff, STALE_AUDIT_REASON);
     if (swept > 0) {
-      console.warn(`[worker] recovered ${swept} audit(s) abandoned by an earlier run`);
+      deps.logger.warn("recovered abandoned audits", { swept, staleAfterMs: deps.staleAfterMs });
     }
     return swept;
   } catch (error) {
     // A sweep failure must not take the worker down with it — scanning is still
     // useful while the database is briefly unhappy.
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`[worker] stale-audit sweep failed: ${message}`);
+    deps.logger.error("stale-audit sweep failed", { err: error });
     return 0;
   }
 }

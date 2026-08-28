@@ -6,6 +6,7 @@ const { setAnalysisForRule } = vi.hoisted(() => ({ setAnalysisForRule: vi.fn() }
 vi.mock("@ally-fix/db", () => ({ setAnalysisForRule }));
 
 import { analyzeAudit, type AnalyzeDeps } from "./analyze";
+import { createFakeLogger } from "./testing/fake-logger";
 import type { ScannedIssue } from "./scanner";
 
 const config: LlmConfig = { provider: "ollama", model: "llama3.1" };
@@ -48,6 +49,7 @@ function deps(overrides: Partial<AnalyzeDeps> & { client: LlmClient }): AnalyzeD
     redis: fakeRedis() as unknown as IORedis,
     config,
     cacheTtlSeconds: 3600,
+    logger: createFakeLogger().logger,
     ...overrides,
   };
 }
@@ -60,8 +62,6 @@ function clientReturning(
 
 beforeEach(() => {
   setAnalysisForRule.mockReset().mockResolvedValue(undefined);
-  vi.spyOn(console, "error").mockImplementation(() => undefined);
-  vi.spyOn(console, "warn").mockImplementation(() => undefined);
 });
 
 describe("analyzeAudit — batching", () => {

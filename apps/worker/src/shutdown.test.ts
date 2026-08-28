@@ -1,17 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import { createShutdownHandler, type ShutdownDeps } from "./shutdown";
+import { createFakeLogger } from "./testing/fake-logger";
 
 function build(overrides: Partial<ShutdownDeps> = {}) {
-  const logs: string[] = [];
+  const captured = createFakeLogger();
   const deps: ShutdownDeps = {
     closeWorker: vi.fn(async () => undefined),
     closeConnections: vi.fn(async () => undefined),
     graceMs: 50,
     exit: vi.fn(),
-    onLog: (message) => logs.push(message),
+    logger: captured.logger,
     ...overrides,
   };
-  return { shutdown: createShutdownHandler(deps), deps, logs };
+  return { shutdown: createShutdownHandler(deps), deps, captured };
 }
 
 describe("graceful shutdown", () => {
@@ -46,14 +47,16 @@ describe("graceful shutdown", () => {
   it("gives up on its own terms when the close hangs", async () => {
     // Platforms follow SIGTERM with SIGKILL on a fixed timer, so waiting forever
     // just means being killed with less control.
-    const { shutdown, deps, logs } = build({
+    const { shutdown, deps, captured } = build({
       graceMs: 20,
       closeWorker: vi.fn(() => new Promise(() => undefined)),
     });
 
     await shutdown("SIGTERM");
 
-    expect(logs.some((l) => l.includes("timed out"))).toBe(true);
+    expect(captured.first("shutting down without a clean stop")).toMatchObject({
+      err: { message: expect.stringContaining("timed out") },
+    });
     // Connections are still released, and we still exit deliberately.
     expect(deps.closeConnections).toHaveBeenCalled();
     expect(deps.exit).toHaveBeenCalledWith(0);
@@ -87,10 +90,13 @@ describe("graceful shutdown", () => {
   });
 
   it("names the signal it received, so the logs explain the exit", async () => {
-    const { shutdown, logs } = build();
+    const { shutdown, captured } = build();
 
     await shutdown("SIGTERM");
 
-    expect(logs[0]).toContain("SIGTERM");
+    expect(captured.first("shutdown started, finishing in-flight scans")).toMatchObject({
+      signal: "SIGTERM",
+      graceMs: 50,
+    });
   });
 });

@@ -1,4 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+
+// The module-level logger writes to stdout; silence it so test output stays readable.
+vi.mock("./logger", () => ({
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() },
+}));
+
 import { checkAndConsume, clientIp } from "./rate-limit";
 
 /** Minimal fake of the ioredis methods checkAndConsume uses. */
