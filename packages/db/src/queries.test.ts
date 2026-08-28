@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   completeAudit,
+  failStaleRunningAudits,
+  SWEEPABLE_STATUSES,
   createAudit,
   failAudit,
   getAuditById,
@@ -174,5 +176,39 @@ describe("setAnalysisForRule", () => {
     await setAnalysisForRule(db, "a-1", "image-alt", analysis);
 
     expect(setPayload(calls)).toEqual({ llmAnalysis: analysis });
+  });
+});
+
+describe("failStaleRunningAudits", () => {
+  it("sweeps `running` only, never `queued`", () => {
+    // A tripwire rather than a proof: it does not inspect the generated SQL, but
+    // adding "queued" here would fail this test and force whoever did it to read
+    // why the demo depends on queued audits waiting indefinitely.
+    expect(SWEEPABLE_STATUSES).toEqual(["running"]);
+    expect(SWEEPABLE_STATUSES).not.toContain("queued");
+  });
+
+  it("reports how many rows it swept", async () => {
+    const { db } = fakeDb([{ id: "a-1" }, { id: "a-2" }]);
+
+    await expect(
+      failStaleRunningAudits(db, new Date("2026-01-01T00:00:00Z"), "interrupted"),
+    ).resolves.toBe(2);
+  });
+
+  it("returns zero when nothing was abandoned", async () => {
+    const { db } = fakeDb([]);
+
+    await expect(failStaleRunningAudits(db, new Date(), "interrupted")).resolves.toBe(0);
+  });
+
+  it("writes a terminal state with the given reason", async () => {
+    const { db, calls } = fakeDb([]);
+
+    await failStaleRunningAudits(db, new Date(), "interrupted");
+
+    const payload = setPayload(calls);
+    expect(payload).toMatchObject({ status: "failed", error: "interrupted" });
+    expect(payload.completedAt).toBeInstanceOf(Date);
   });
 });

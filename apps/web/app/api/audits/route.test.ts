@@ -1,14 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { assertUrlIsSafe, createAudit, enqueueAudit, checkAndConsume } = vi.hoisted(() => ({
-  assertUrlIsSafe: vi.fn(),
-  createAudit: vi.fn(),
-  enqueueAudit: vi.fn(),
-  checkAndConsume: vi.fn(),
-}));
+const { assertUrlIsSafe, createAudit, failAudit, enqueueAudit, checkAndConsume } = vi.hoisted(
+  () => ({
+    assertUrlIsSafe: vi.fn(),
+    createAudit: vi.fn(),
+    failAudit: vi.fn(),
+    enqueueAudit: vi.fn(),
+    checkAndConsume: vi.fn(),
+  }),
+);
 
 vi.mock("@ally-fix/shared/ssrf", () => ({ assertUrlIsSafe }));
-vi.mock("@ally-fix/db", () => ({ createAudit }));
+vi.mock("@ally-fix/db", () => ({ createAudit, failAudit }));
 vi.mock("@/lib/queue", () => ({ enqueueAudit }));
 vi.mock("@/lib/db", () => ({ getDb: () => ({}) }));
 vi.mock("@/lib/rate-limit", async () => {
@@ -32,6 +35,7 @@ beforeEach(() => {
   assertUrlIsSafe.mockResolvedValue({ ok: true, url: "https://example.com/" });
   createAudit.mockResolvedValue({ id: "audit-uuid" });
   enqueueAudit.mockResolvedValue(undefined);
+  failAudit.mockResolvedValue(undefined);
   checkAndConsume.mockResolvedValue({ allowed: true, limit: 10, remaining: 9 });
 });
 
@@ -124,5 +128,45 @@ describe("POST /api/audits — rate limiting", () => {
 
     // x-forwarded-for is caller-appendable; x-real-ip is set by the platform.
     expect(checkAndConsume).toHaveBeenCalledWith("198.51.100.9", expect.any(Number));
+  });
+});
+
+describe("POST /api/audits — when the queue is unavailable", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    enqueueAudit.mockRejectedValue(new Error("Redis unreachable"));
+  });
+
+  it("does not strand the audit in `queued` with no job to run it", async () => {
+    // The row is created before the job exists. If the enqueue fails and nothing
+    // marks the row, it waits in `queued` forever for a worker that was never
+    // told about it, and the report page polls a scan that is never coming.
+    const response = await POST(post({ url: "https://example.com" }));
+
+    expect(failAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      "audit-uuid",
+      expect.stringContaining("could not be queued"),
+    );
+    expect(response.status).toBe(503);
+  });
+
+  it("tells the caller it is a transient problem on our side", async () => {
+    const response = await POST(post({ url: "https://example.com" }));
+
+    const body = (await response.json()) as { error: string; auditId?: string };
+    expect(body.error).toContain("try again");
+    // No id is handed out for an audit that will never run.
+    expect(body.auditId).toBeUndefined();
+  });
+
+  it("still answers 503 when even marking the audit failed does not work", async () => {
+    // Redis and Postgres are often down together; the caller must still get a
+    // real answer rather than an unhandled 500.
+    failAudit.mockRejectedValue(new Error("Postgres unreachable"));
+
+    const response = await POST(post({ url: "https://example.com" }));
+
+    expect(response.status).toBe(503);
   });
 });

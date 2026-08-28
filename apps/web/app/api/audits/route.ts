@@ -1,4 +1,4 @@
-import { createAudit } from "@ally-fix/db";
+import { createAudit, failAudit } from "@ally-fix/db";
 import { createAuditRequestSchema } from "@ally-fix/shared";
 import { NextResponse } from "next/server";
 import { assertUrlIsSafe } from "@ally-fix/shared/ssrf";
@@ -40,7 +40,23 @@ export async function POST(request: Request): Promise<Response> {
 
   const db = getDb();
   const audit = await createAudit(db, safe.url);
-  await enqueueAudit({ auditId: audit.id, url: safe.url });
+
+  // The row exists before the job does, so a Redis failure here would strand it
+  // in `queued` with nothing to pick it up — and the caller would get a 500 with
+  // no audit id, so they could not even see what happened. Mark it failed and
+  // say so instead.
+  try {
+    await enqueueAudit({ auditId: audit.id, url: safe.url });
+  } catch (error) {
+    console.error(`[api] could not queue audit ${audit.id}:`, error);
+    await failAudit(db, audit.id, "The scan could not be queued. Please try again.").catch(
+      () => undefined,
+    );
+    return NextResponse.json(
+      { error: "The scan queue is unavailable right now. Please try again in a moment." },
+      { status: 503 },
+    );
+  }
 
   return NextResponse.json({ auditId: audit.id }, { status: 201 });
 }

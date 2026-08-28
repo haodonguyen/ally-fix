@@ -1,4 +1,4 @@
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray, lt } from "drizzle-orm";
 import type { LlmIssueAnalysis } from "@ally-fix/shared";
 import type { Database } from "./client";
 import { audits, issues, type AuditRow, type IssueRow, type NewIssueRow } from "./schema";
@@ -70,4 +70,40 @@ export async function getAuditById(db: Database, id: string): Promise<AuditRow |
 /** Fetch all issues for an audit, oldest first (stable display order). */
 export async function getIssuesByAudit(db: Database, auditId: string): Promise<IssueRow[]> {
   return db.select().from(issues).where(eq(issues.auditId, auditId)).orderBy(asc(issues.id));
+}
+
+/**
+ * Fail audits that a worker started and never finished, returning how many were
+ * swept. An audit moves to `running` only when a worker picks it up, so a
+ * `running` row older than the cutoff means the process holding it died — there
+ * is nothing left to complete it, and without this it stays `running` forever.
+ *
+ * Deliberately does NOT touch `queued`. In the on-demand demo the worker is
+ * offline most of the time and a queued audit is legitimately waiting, sometimes
+ * for hours; sweeping those would delete work that is still going to happen.
+ */
+/**
+ * The only status a stale sweep may touch.
+ *
+ * `queued` is excluded on purpose and must stay excluded: in the on-demand demo
+ * the worker is offline most of the time, so a queued audit is legitimately
+ * waiting — sometimes for hours — and sweeping it would delete work that is
+ * still going to happen. Named here so that widening it is a deliberate edit
+ * with a test to update, not an inline literal someone extends in passing.
+ */
+export const SWEEPABLE_STATUSES = ["running"] as const;
+
+export async function failStaleRunningAudits(
+  db: Database,
+  startedBefore: Date,
+  reason: string,
+): Promise<number> {
+  const swept = await db
+    .update(audits)
+    .set({ status: "failed", completedAt: new Date(), error: reason })
+    .where(
+      and(inArray(audits.status, [...SWEEPABLE_STATUSES]), lt(audits.createdAt, startedBefore)),
+    )
+    .returning({ id: audits.id });
+  return swept.length;
 }
