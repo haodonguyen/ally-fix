@@ -35,8 +35,13 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Test
-        run: pnpm test
+      - name: Test & coverage
+        # Coverage thresholds live in vitest.config.ts and fail the run when they
+        # drop, so the gate is a ratchet rather than a report nobody reads.
+        run: pnpm test:coverage
 
       - name: Build
         run: pnpm build
+
+      - name: Check formatting
+        run: pnpm format:check

@@ -47,7 +47,11 @@ const SLOW_SCAN_MS = 20_000;
 const SAMPLE_REPORTS = [
   { id: "117d1422-f8e6-4a87-a6ae-064e4cbcd058", label: "a11yproject.com", score: "100 / 100" },
   { id: "14b757d5-86c6-4eb6-b376-60c4cd77e700", label: "W3C “before” demo", score: "6 / 100" },
-  { id: "190fbd67-bc34-41b0-8c63-e72ae5557c75", label: "A large e-commerce homepage", score: "5 / 100" },
+  {
+    id: "190fbd67-bc34-41b0-8c63-e72ae5557c75",
+    label: "A large e-commerce homepage",
+    score: "5 / 100",
+  },
 ];
 
 export function AuditReport({ auditId }: { auditId: string }) {
@@ -164,10 +168,9 @@ function SlowScanNotice() {
         This scan is taking a while
       </h2>
       <p>
-        Live scans run on a Playwright worker that runs on demand in this free
-        hosted demo, so a brand-new scan finishes only while it’s awake. Your report
-        will appear here automatically if it comes online. In the meantime, here are
-        pre-run reports you can open right away:
+        Live scans run on a Playwright worker that runs on demand in this free hosted demo, so a
+        brand-new scan finishes only while it’s awake. Your report will appear here automatically if
+        it comes online. In the meantime, here are pre-run reports you can open right away:
       </p>
       <ul className={styles.sampleList}>
         {SAMPLE_REPORTS.map((sample) => (

@@ -2,7 +2,7 @@
   "name": "ally-fix",
   "version": "0.0.0",
   "private": true,
-  "description": "AllyFix — an open-source accessibility auditor that explains WHY each WCAG issue matters and HOW to fix it, right in your code.",
+  "description": "AllyFix \u2014 an open-source accessibility auditor that explains WHY each WCAG issue matters and HOW to fix it, right in your code.",
   "license": "MIT",
   "engines": {
     "node": ">=22.13"
@@ -16,12 +16,14 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "db:generate": "pnpm --filter @ally-fix/db db:generate",
     "db:migrate": "pnpm --filter @ally-fix/db db:migrate"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.1.0",
+    "@vitest/coverage-v8": "^4.1.11",
     "eslint": "^10.6.0",
     "prettier": "^3.9.4",
     "typescript": "^6.0.3",
