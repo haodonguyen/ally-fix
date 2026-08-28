@@ -5,7 +5,9 @@ import { Worker } from "bullmq";
 import IORedis from "ioredis";
 import { env, resolveLlmClientOptions, resolveLlmConfig } from "./env";
 import { createAuditProcessor } from "./process-audit";
+import { startReaper } from "./reaper";
 import { scanUrl } from "./scanner";
+import { createShutdownHandler } from "./shutdown";
 
 /**
  * AllyFix scanner worker — process wiring only.
@@ -38,6 +40,14 @@ const processAudit = createAuditProcessor({
 
 const worker = new Worker(AUDIT_QUEUE_NAME, processAudit, { connection, concurrency: 2 });
 
+// Recovers audits left `running` by a worker that died mid-scan — including, on
+// the first pass, casualties of this process's own predecessor.
+const stopReaper = startReaper({
+  db,
+  staleAfterMs: env.STALE_AUDIT_AFTER_MS,
+  intervalMs: env.STALE_SWEEP_INTERVAL_MS,
+});
+
 worker.on("completed", (job) => {
   console.log(`[worker] audit ${job.id} completed`);
 });
@@ -45,5 +55,19 @@ worker.on("completed", (job) => {
 worker.on("failed", (job, error) => {
   console.error(`[worker] audit ${job?.id} failed: ${error.message}`);
 });
+
+const shutdown = createShutdownHandler({
+  closeWorker: () => worker.close(),
+  closeConnections: async () => {
+    stopReaper();
+    await Promise.allSettled([connection.quit(), cacheRedis.quit()]);
+  },
+  graceMs: env.SHUTDOWN_GRACE_MS,
+  exit: (code) => process.exit(code),
+});
+
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.on(signal, () => void shutdown(signal));
+}
 
 console.log(`[worker] AllyFix scanner worker started, listening on "${AUDIT_QUEUE_NAME}".`);

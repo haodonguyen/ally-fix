@@ -51,6 +51,20 @@ export const env = {
   SCAN_TIMEOUT_MS: positiveIntEnv("SCAN_TIMEOUT_MS", 30_000),
   /** How long a cached LLM analysis stays valid, in seconds (default 30 days). */
   LLM_CACHE_TTL_SECONDS: positiveIntEnv("LLM_CACHE_TTL_SECONDS", 60 * 60 * 24 * 30),
+  /**
+   * How long in-flight scans get to finish after a SIGTERM. Kept under the 30s
+   * most platforms allow between SIGTERM and SIGKILL, so we exit on our own
+   * terms rather than being killed mid-write.
+   */
+  SHUTDOWN_GRACE_MS: positiveIntEnv("SHUTDOWN_GRACE_MS", 20_000),
+  /**
+   * A `running` audit older than this was abandoned by a dead worker. Comfortably
+   * above SCAN_TIMEOUT_MS plus the LLM pass, so a slow-but-live scan is never
+   * swept out from under itself.
+   */
+  STALE_AUDIT_AFTER_MS: positiveIntEnv("STALE_AUDIT_AFTER_MS", 15 * 60_000),
+  /** How often to sweep for abandoned audits after the pass at startup. */
+  STALE_SWEEP_INTERVAL_MS: positiveIntEnv("STALE_SWEEP_INTERVAL_MS", 5 * 60_000),
 };
 
 /**
