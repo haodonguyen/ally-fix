@@ -90,6 +90,12 @@ All of it is best-effort by design: the raw axe issues are already in Postgres
 before the first LLM call, so a total provider outage costs the explanations, not
 the scan.
 
+### Why it's built this way
+
+The decisions above — and the ones behind SSRF, the LLM contract, and the failure
+policy — are recorded as [Architecture Decision Records](./docs/adr/), each with
+the alternatives that were rejected and what the choice cost.
+
 ## Tech stack
 
 - **TypeScript** everywhere, **pnpm** workspaces monorepo.
