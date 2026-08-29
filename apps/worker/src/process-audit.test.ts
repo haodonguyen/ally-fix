@@ -54,7 +54,10 @@ let clock = 0;
 
 function build(overrides: Partial<ProcessAuditDeps> = {}) {
   const scan = vi.fn<ProcessAuditDeps["scan"]>().mockResolvedValue([]);
-  const llmClient: LlmClient = { analyzeIssueGroup: vi.fn().mockResolvedValue(analysis) };
+  const llmClient: LlmClient = {
+    promptFingerprint: "test",
+    analyzeIssueGroup: vi.fn().mockResolvedValue(analysis),
+  };
   const captured: CapturedLogger = createFakeLogger();
   const deps: ProcessAuditDeps = {
     db: {} as ProcessAuditDeps["db"],
@@ -139,6 +142,7 @@ describe("the happy path", () => {
     const order: string[] = [];
     insertIssues.mockImplementation(async () => void order.push("insert"));
     const llmClient: LlmClient = {
+      promptFingerprint: "test",
       analyzeIssueGroup: vi.fn(async () => {
         order.push("analyze");
         return analysis;
@@ -181,6 +185,7 @@ describe("the happy path", () => {
 describe("the best-effort contract", () => {
   it("completes the audit even when every LLM call fails", async () => {
     const llmClient: LlmClient = {
+      promptFingerprint: "test",
       analyzeIssueGroup: vi.fn().mockRejectedValue(new Error("no provider reachable")),
     };
     const { process } = build({

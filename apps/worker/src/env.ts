@@ -68,6 +68,19 @@ export const env = {
 };
 
 /**
+ * Reads a boolean env var. Only an explicit "false"/"0"/"no"/"off" turns a
+ * default-on flag off; anything else unrecognised keeps the default rather than
+ * being read as false, so a typo cannot quietly disable a feature.
+ */
+function booleanEnv(name: string, fallback: boolean): boolean {
+  const raw = rawEnv(name)?.toLowerCase();
+  if (raw === undefined) return fallback;
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  return fallback;
+}
+
+/**
  * Builds the LLM config from the environment. Defaults to Ollama (free, local),
  * so a self-hosted run needs no API key. Provider keys are read at call time and
  * never stored anywhere but this in-memory config.
@@ -120,5 +133,9 @@ export function resolveLlmClientOptions(config: LlmConfig): CreateLlmClientOptio
     requestsPerMinute: nonNegativeIntEnv("LLM_REQUESTS_PER_MINUTE", hostedDefaultRpm),
     circuitBreakerThreshold: nonNegativeIntEnv("LLM_BREAKER_THRESHOLD", 5),
     circuitBreakerResetMs: positiveIntEnv("LLM_BREAKER_RESET_MS", 30_000),
+    // On by default. The switch exists so `eval:compare` can run the same golden
+    // set with grounding off and attribute the difference; it is a measurement
+    // control, not a setting anyone tuning a deployment should need to touch.
+    grounded: booleanEnv("LLM_GROUNDING", true),
   };
 }

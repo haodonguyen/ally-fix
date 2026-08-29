@@ -6,6 +6,7 @@ succeeded. The pipeline's reliability is covered by unit tests; this covers its
 
 ```bash
 pnpm --filter @ally-fix/worker eval           # score the model against the golden set
+pnpm --filter @ally-fix/worker eval:compare   # score it with and without WCAG grounding
 pnpm --filter @ally-fix/worker eval:validate  # check the dataset itself is still valid
 ```
 
@@ -60,3 +61,28 @@ the snippet. Neither can be measured honestly this way, so neither is claimed.
 Three of the first twenty cases were wrong when written — axe accepts a
 `placeholder` as an accessible name, among other surprises — and `eval:validate`
 caught all three. Hence the check running on every eval.
+
+## Comparing two prompts
+
+`eval:compare` runs the whole set twice — once with the WCAG reference block in
+the prompt, once without — and reports the difference. It exists because a prompt
+change with no number attached is a preference, not an improvement.
+
+```bash
+EVAL_REPEATS=3 pnpm --filter @ally-fix/worker eval:compare
+```
+
+Two things keep the comparison from flattering itself:
+
+- **It prints every repeat's rate, not just the pooled one.** The model is not
+  deterministic. A five-point gap between arms means nothing if the runs within
+  an arm already spread that far, and a single repeat per arm is labelled as
+  unmeasured rather than reported as a result.
+- **It names the cases that got _worse_.** A prompt that fixes four rules and
+  breaks three moves the headline up. That is not the same change as one that
+  only adds, and the report refuses to let the two look alike.
+
+Everything except the reference block is held constant across the arms —
+including the instruction not to delete the offending element, which lives in the
+base prompt precisely so grounding cannot take credit for it. See
+[ADR-0007](../../../docs/adr/0007-ground-prompts-in-wcag.md).

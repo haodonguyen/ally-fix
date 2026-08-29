@@ -2,7 +2,23 @@
 export type { LlmProviderName, LlmConfig, IssueGroupInput, LlmClient } from "./types";
 export { createLlmClient, backoffDelay, coerceRawOutput } from "./client";
 export type { CreateLlmClientOptions, SingleShotGenerate } from "./client";
-export { buildAnalysisPrompt, ANALYSIS_SYSTEM_PROMPT, MAX_PROMPT_SNIPPETS } from "./prompt";
+export {
+  buildAnalysisPrompt,
+  analysisSystemPrompt,
+  MAX_PROMPT_SNIPPETS,
+  promptFingerprint,
+} from "./prompt";
+export type { BuildPromptOptions } from "./prompt";
+export {
+  groundingFor,
+  formatGrounding,
+  AXE_CORE_VERSION,
+  MAX_GROUNDED_CRITERIA,
+  allGroundingBlocks,
+} from "./grounding";
+export type { RuleGrounding, AxeRuleFacts, WcagCriterion } from "./grounding";
+export { WCAG_CRITERIA, understandingUrl } from "./grounding/wcag-criteria";
+export { AXE_RULE_FACTS } from "./grounding/axe-rules.generated";
 export { resolveModel } from "./providers";
 export {
   LlmError,

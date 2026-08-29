@@ -22,5 +22,11 @@ export interface IssueGroupInput {
 
 /** Turns a group of same-rule issues into a plain-language explanation and fix. */
 export interface LlmClient {
+  /**
+   * Identifies the prompt this client sends. Anything caching an answer has to
+   * include it in the key — the answer belongs to the prompt that produced it,
+   * not just to the rule and the markup.
+   */
+  readonly promptFingerprint: string;
   analyzeIssueGroup(input: IssueGroupInput): Promise<LlmIssueAnalysis>;
 }

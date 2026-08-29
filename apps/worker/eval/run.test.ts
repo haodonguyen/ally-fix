@@ -1,7 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import type { LlmIssueAnalysis } from "@ally-fix/shared";
 import type { EvalCase } from "./cases";
-import { formatReport, runCase, runEval, summarise, type CaseResult, type EvalDeps } from "./run";
+import {
+  compareArms,
+  formatComparison,
+  formatReport,
+  runCase,
+  runEval,
+  summarise,
+  summariseArm,
+  type CaseResult,
+  type CaseVerdict,
+  type EvalDeps,
+} from "./run";
 import type { AxeVerifier, RuleOutcome } from "./verify";
 
 const IMAGE_CASE: EvalCase = {
@@ -211,5 +222,100 @@ describe("runEval", () => {
     );
 
     expect(all.map((r) => r.case.id)).toEqual(["image-alt/missing", "second"]);
+  });
+});
+
+// ── A/B comparison ───────────────────────────────────────────────────────────
+
+/** A CaseResult with only the fields the arm/comparison maths reads. */
+function result(id: string, verdict: CaseVerdict, latencyMs = 100): CaseResult {
+  return { case: { ...IMAGE_CASE, id }, verdict, latencyMs };
+}
+
+describe("summariseArm", () => {
+  it("pools the rate across repeats and keeps each run's own rate", () => {
+    const stats = summariseArm("grounded", [
+      [result("a", "resolved"), result("b", "not-resolved")],
+      [result("a", "resolved"), result("b", "resolved")],
+    ]);
+
+    expect(stats.repeats).toBe(2);
+    expect(stats.resolvedRate).toBeCloseTo(3 / 4);
+    expect(stats.perRunRate).toEqual([0.5, 1]);
+  });
+
+  it("counts how often each case was resolved", () => {
+    const stats = summariseArm("x", [
+      [result("a", "resolved"), result("b", "degenerate")],
+      [result("a", "not-resolved"), result("b", "degenerate")],
+    ]);
+
+    expect(stats.resolvedByCase.get("a")).toBe(1);
+    expect(stats.resolvedByCase.get("b")).toBe(0);
+  });
+
+  it("leaves broken cases out of the rate, as the single-run scoreboard does", () => {
+    const stats = summariseArm("x", [[result("a", "resolved"), result("b", "broken-case", 0)]]);
+    expect(stats.resolvedRate).toBe(1);
+    expect(stats.counts["broken-case"]).toBe(1);
+  });
+});
+
+describe("compareArms", () => {
+  const baseline = summariseArm("ungrounded", [
+    [result("a", "not-resolved"), result("b", "resolved"), result("c", "resolved")],
+  ]);
+
+  it("reports the delta and which cases moved", () => {
+    const candidate = summariseArm("grounded", [
+      [result("a", "resolved"), result("b", "not-resolved"), result("c", "resolved")],
+    ]);
+    const comparison = compareArms(baseline, candidate);
+
+    expect(comparison.delta).toBeCloseTo(0);
+    expect(comparison.gained).toEqual(["a"]);
+    // The headline is flat, but one rule broke and another was fixed. A rate
+    // alone would have called this "no change".
+    expect(comparison.lost).toEqual(["b"]);
+  });
+
+  it("ignores a case that only one arm ran", () => {
+    const candidate = summariseArm("grounded", [
+      [result("a", "resolved"), result("b", "resolved"), result("d", "resolved")],
+    ]);
+    expect(compareArms(baseline, candidate).gained).toEqual(["a"]);
+  });
+
+  it("shows a real improvement as a positive delta", () => {
+    const candidate = summariseArm("grounded", [
+      [result("a", "resolved"), result("b", "resolved"), result("c", "resolved")],
+    ]);
+    expect(compareArms(baseline, candidate).delta).toBeCloseTo(1 / 3);
+  });
+});
+
+describe("formatComparison", () => {
+  const baseline = summariseArm("ungrounded", [[result("a", "not-resolved")]]);
+  const candidate = summariseArm("grounded", [[result("a", "resolved")]]);
+
+  it("warns that a one-repeat comparison is not a measurement", () => {
+    const report = formatComparison(compareArms(baseline, candidate));
+    expect(report).toContain("Read with care: 1 repeat");
+  });
+
+  it("drops the warning once there are enough repeats", () => {
+    const many = (verdict: CaseVerdict) =>
+      summariseArm(
+        "x",
+        Array.from({ length: 3 }, () => [result("a", verdict)]),
+      );
+    const report = formatComparison(compareArms(many("not-resolved"), many("resolved")));
+    expect(report).not.toContain("Read with care");
+    expect(report).toContain("+100.0 points");
+  });
+
+  it("says so plainly when nothing moved", () => {
+    const report = formatComparison(compareArms(baseline, baseline));
+    expect(report).toContain("no case changed verdict");
   });
 });

@@ -107,6 +107,49 @@ rule group to rediscover the same 401.
 All of it is best-effort by design: the raw axe issues are in Postgres **before**
 the first LLM call, so a total provider outage costs the explanations, not the scan.
 
+## Making the answers good, not just well-formed
+
+Everything above keeps a bad call from breaking the system. None of it says
+whether the answer was _right_ — and for an accessibility tool, a confident wrong
+fix is the worst output there is.
+
+**The prompt carries the standard.** Each call ships the failing rule's WCAG
+success criterion: what it requires, who a failure hurts, and the accepted ways to
+satisfy it, with a link to the W3C source. The axe half of that reference is
+**generated from the installed axe-core**, and a test fails the build if the two
+drift — so the prompt can never describe a version of a rule the scanner no longer
+runs. The WCAG half is hand-written at **criterion level only**: per-rule fix hints
+for the eighteen rules the eval covers would raise the score without making the
+system better at the other fifty-seven. ([ADR-0007](./docs/adr/0007-ground-prompts-in-wcag.md))
+
+**The answers are scored against a deterministic oracle.** Evaluating generated
+text usually means asking another model whether it liked the answer. This project
+does not have to: every issue comes from an axe rule, and axe will re-run. So the
+question is _"apply the model's own `fixCode` — does the rule still fire?"_ The
+headline metric, `resolved`, is the share of 22 golden cases where it stops firing.
+
+**And the oracle alone would lie.** "Make axe stop reporting `image-alt`" has a
+trivial degenerate solution: delete the `<img>`. It passes and helps nobody, so a
+fix only counts if it still contains the element the rule was about.
+
+**Prompt changes are A/B'd, not asserted.** `eval:compare` runs the same set with
+grounding on and off, holding everything else constant, and prints each repeat's
+rate rather than one pooled number — the model is not deterministic, and a small
+delta across noisy runs is unmeasured, not zero. It also names the cases that got
+_worse_, because a change that fixes four rules and breaks three is not the same
+change as one that only adds.
+
+Two details make that measurable at all: the cache key includes a **fingerprint of
+the prompt**, so a prompt change cannot be masked by 30 days of pre-change answers;
+and the "don't delete the element" instruction sits in the **base** prompt, in both
+arms, so grounding cannot take credit for it.
+
+Three of the first twenty golden cases turned out not to violate the rules they
+claimed to — axe accepts a `placeholder` as an accessible name, among other
+surprises. The dataset re-checks itself on every run, and a rotted case is reported
+as `broken-case` rather than counted against the model. See
+[`apps/worker/eval/`](./apps/worker/eval/).
+
 ## When a process dies
 
 The worker runs on demand, so being interrupted mid-scan is the normal ending, not
@@ -153,8 +196,8 @@ readiness, checks both dependencies, and names which one is down.
 
 ## How this is tested
 
-**251 tests**, gated in CI at 90% statements / 88% branches / 88% functions / 90%
-lines against measured 96.5 / 92.9 / 94.0 / 97.9. The thresholds are a **ratchet**
+**321 tests**, gated in CI at 90% statements / 88% branches / 88% functions / 90%
+lines against measured 96.6 / 92.9 / 94.6 / 98.1. The thresholds are a **ratchet**
 set at what the suite reaches, so a drop fails the build.
 
 The tests aim at the paths that are hard to reach and easy to get wrong: the HTTP
@@ -177,7 +220,7 @@ is protected and requires both to pass.
 
 ## Why it's built this way
 
-Six [Architecture Decision Records](./docs/adr/) record the decisions above — each
+Seven [Architecture Decision Records](./docs/adr/) record the decisions above — each
 with the alternatives that were rejected and **what the choice cost**, including
 the costs already paid. Requiring schema-validated output, for example, ruled out a
 Groq model that rejects the AI SDK's `json_schema` format.
@@ -205,9 +248,11 @@ ally-fix/
     web/         Next.js: frontend, API routes, health + readiness probes
     worker/      Playwright + axe-core scanner (separate service)
                  scan → store → analyse, plus shutdown and stale-audit recovery
+      eval/      Golden set + axe oracle: does the model's own fix work?
   packages/
     db/          Drizzle schema, queries, Postgres client
     llm/         Provider-agnostic LLM layer: errors, throttle, circuit breaker
+      grounding/ WCAG criteria + axe rule facts injected into the prompt
     shared/      Zod schemas, types, scoring, SSRF guard, structured logger
   docs/adr/      Architecture Decision Records
   docker-compose.yml
@@ -263,6 +308,12 @@ pnpm test:coverage  # ...with the coverage thresholds enforced
 pnpm format         # Prettier, write
 pnpm build          # production build
 pnpm db:generate    # regenerate Drizzle migrations after a schema change
+
+# Output quality — manual, needs a real provider (and Chromium for the first two)
+pnpm --filter @ally-fix/worker eval           # score the model against the golden set
+pnpm --filter @ally-fix/worker eval:compare   # score it with and without WCAG grounding
+pnpm --filter @ally-fix/worker eval:validate  # check the golden set is still valid
+pnpm --filter @ally-fix/llm grounding:generate  # refresh the axe rule facts after an axe upgrade
 ```
 
 ## Deployment
