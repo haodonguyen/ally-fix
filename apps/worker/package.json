@@ -9,6 +9,8 @@
     "start:demo": "node --env-file=../../.env --import tsx src/index.ts",
     "seed:a11y": "tsx scripts/seed-a11y.ts",
     "check:a11y": "tsx scripts/a11y-check.ts",
+    "eval": "node --env-file=../../.env --import tsx eval/index.ts",
+    "eval:validate": "tsx eval/validate.ts",
     "typecheck": "tsc --noEmit",
     "test": "echo \"no tests yet\" && exit 0"
   },
