@@ -12,6 +12,7 @@
  * provider's health, so it must not open the breaker. Conversely a bad API key
  * is not worth retrying but *is* a reason to stop calling the provider at all.
  */
+import type { TokenUsage } from "./usage";
 
 /** Base class so callers can `instanceof LlmError` without knowing the variants. */
 export abstract class LlmError extends Error {
@@ -112,6 +113,12 @@ export class LlmAnalysisError extends LlmError {
   constructor(
     readonly attempts: number,
     override readonly cause: unknown,
+    /**
+     * Tokens the failed attempts still consumed. A group that failed after four
+     * tries was billed for four calls; dropping that on the floor understates
+     * cost exactly when something is going wrong and the bill is climbing.
+     */
+    readonly usage: TokenUsage | null = null,
   ) {
     const reason = cause instanceof Error ? cause.message : String(cause);
     super(`LLM analysis failed after ${attempts} attempt(s): ${reason}`);

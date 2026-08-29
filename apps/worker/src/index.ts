@@ -3,7 +3,7 @@ import { AUDIT_QUEUE_NAME } from "@ally-fix/shared";
 import { createLlmClient } from "@ally-fix/llm";
 import { Worker } from "bullmq";
 import IORedis from "ioredis";
-import { env, resolveLlmClientOptions, resolveLlmConfig } from "./env";
+import { env, resolveLlmClientOptions, resolveLlmConfig, resolveLlmPrices } from "./env";
 import { logger } from "./logger";
 import { createAuditProcessor } from "./process-audit";
 import { startReaper } from "./reaper";
@@ -36,6 +36,7 @@ const processAudit = createAuditProcessor({
   llmClient,
   scanTimeoutMs: env.SCAN_TIMEOUT_MS,
   cacheTtlSeconds: env.LLM_CACHE_TTL_SECONDS,
+  llmPrices: resolveLlmPrices(),
   scan: scanUrl,
   logger,
 });
@@ -82,4 +83,7 @@ logger.info("worker started", {
   provider: llmConfig.provider,
   model: llmConfig.model,
   scanTimeoutMs: env.SCAN_TIMEOUT_MS,
+  // Says at startup whether cost will be reported at all, so an operator finds
+  // out here rather than from a month of null costUsd fields.
+  pricing: resolveLlmPrices() ? "configured" : "not configured",
 });

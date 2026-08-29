@@ -7,10 +7,10 @@ import {
 } from "@ally-fix/db";
 import type { NewIssueRow } from "@ally-fix/db";
 import { auditJobPayloadSchema, computeAccessibilityScore } from "@ally-fix/shared";
-import type { LlmClient, LlmConfig } from "@ally-fix/llm";
+import type { LlmClient, LlmConfig, TokenPrices } from "@ally-fix/llm";
 import type { Logger } from "@ally-fix/shared/logger";
 import type IORedis from "ioredis";
-import { analyzeAudit } from "./analyze";
+import { analyzeAudit, roundUsd } from "./analyze";
 import { toPublicError } from "./public-error";
 import type { ScannedIssue } from "./scanner";
 
@@ -29,6 +29,8 @@ export interface ProcessAuditDeps {
   llmClient: LlmClient;
   scanTimeoutMs: number;
   cacheTtlSeconds: number;
+  /** Per-million-token rates for costing the audit. Null leaves the cost unreported. */
+  llmPrices?: TokenPrices | null;
   /** Injected so tests don't need a browser. */
   scan: (url: string, timeoutMs: number) => Promise<ScannedIssue[]>;
   logger: Logger;
@@ -82,14 +84,25 @@ export function createAuditProcessor(deps: ProcessAuditDeps) {
         redis: deps.cacheRedis,
         config: deps.llmConfig,
         cacheTtlSeconds: deps.cacheTtlSeconds,
+        prices: deps.llmPrices ?? null,
         client: deps.llmClient,
         logger: log,
       });
+      // Flattened rather than spread, so the fields a cost dashboard groups by
+      // are a stable shape rather than whatever AnalyzeResult happens to hold.
       log.info("analysis finished", {
         analysisMs: now() - analysisStartedAt,
         provider: deps.llmConfig.provider,
         model: deps.llmConfig.model,
-        ...result,
+        analyzed: result.analyzed,
+        failed: result.failed,
+        skipped: result.skipped,
+        cacheHits: result.cacheHits,
+        inputTokens: result.usage?.inputTokens ?? null,
+        outputTokens: result.usage?.outputTokens ?? null,
+        reasoningTokens: result.usage?.reasoningTokens ?? null,
+        totalTokens: result.usage?.totalTokens ?? null,
+        costUsd: roundUsd(result.costUsd),
       });
 
       const score = computeAccessibilityScore(scanned.map((issue) => issue.impact));

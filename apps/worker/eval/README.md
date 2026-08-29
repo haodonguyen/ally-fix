@@ -34,6 +34,21 @@ where removal genuinely _is_ the correct fix — `nested-interactive` is resolve
 dropping one of two nested controls — opt in with `allowsRemoval`. That is a real
 hole in the check, which is why it is per-case and explicit rather than inferred.
 
+## What a run costs
+
+Every case reports the tokens it consumed, **retries included** — a case that
+only parsed on the third attempt was billed three times. Dollars need a rate, and
+rates are configuration rather than code (see
+[ADR-0008](../../../docs/adr/0008-tokens-are-measured-cost-is-configured.md)):
+
+```bash
+LLM_PRICE_INPUT_PER_MTOK=0.10 LLM_PRICE_OUTPUT_PER_MTOK=0.50   pnpm --filter @ally-fix/worker eval:compare
+```
+
+Without a rate the report prints exact token counts and `no rate configured` —
+never `$0.0000`. "Free" and "unknown" are different facts and only one of them
+belongs in a sentence about money.
+
 ## Verdicts
 
 | Verdict           | Meaning                                                           |
@@ -72,7 +87,7 @@ change with no number attached is a preference, not an improvement.
 EVAL_REPEATS=3 pnpm --filter @ally-fix/worker eval:compare
 ```
 
-Two things keep the comparison from flattering itself:
+Three things keep the comparison from flattering itself:
 
 - **It prints every repeat's rate, not just the pooled one.** The model is not
   deterministic. A five-point gap between arms means nothing if the runs within
@@ -81,6 +96,9 @@ Two things keep the comparison from flattering itself:
 - **It names the cases that got _worse_.** A prompt that fixes four rules and
   breaks three moves the headline up. That is not the same change as one that
   only adds, and the report refuses to let the two look alike.
+- **It prints what the candidate prompt costs**, as input tokens per call, right
+  next to the delta. A prompt change always has a price; a report showing only
+  the benefit is half an answer.
 
 Everything except the reference block is held constant across the arms —
 including the instruction not to delete the offending element, which lives in the

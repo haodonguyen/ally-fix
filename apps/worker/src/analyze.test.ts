@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { CircuitOpenError, LlmAnalysisError, type LlmClient, type LlmConfig } from "@ally-fix/llm";
+import {
+  CircuitOpenError,
+  LlmAnalysisError,
+  type LlmAnalysisResult,
+  type LlmClient,
+  type LlmConfig,
+  type TokenUsage,
+} from "@ally-fix/llm";
 import type IORedis from "ioredis";
 
 const { setAnalysisForRule } = vi.hoisted(() => ({ setAnalysisForRule: vi.fn() }));
@@ -17,6 +24,15 @@ const analysis = {
   fixCode: '<img alt="A cat">',
   priority: "high" as const,
 };
+
+function usage(inputTokens = 900, outputTokens = 120): TokenUsage {
+  return {
+    inputTokens,
+    outputTokens,
+    reasoningTokens: 0,
+    totalTokens: inputTokens + outputTokens,
+  };
+}
 
 function issue(ruleId: string, htmlSnippet: string): ScannedIssue {
   return {
@@ -57,8 +73,10 @@ function deps(overrides: Partial<AnalyzeDeps> & { client: LlmClient }): AnalyzeD
 function clientReturning(
   value = analysis,
   promptFingerprint = "prompt-a",
+  spent: TokenUsage | null = usage(),
 ): LlmClient & { analyzeIssueGroup: ReturnType<typeof vi.fn> } {
-  return { promptFingerprint, analyzeIssueGroup: vi.fn().mockResolvedValue(value) } as never;
+  const result: LlmAnalysisResult = { analysis: value, usage: spent, costUsd: 0, attempts: 1 };
+  return { promptFingerprint, analyzeIssueGroup: vi.fn().mockResolvedValue(result) } as never;
 }
 
 beforeEach(() => {
@@ -78,7 +96,7 @@ describe("analyzeAudit — batching", () => {
     const result = await analyzeAudit("audit-1", issues, deps({ client }));
 
     expect(client.analyzeIssueGroup).toHaveBeenCalledTimes(2);
-    expect(result).toEqual({ analyzed: 2, failed: 0, skipped: 0 });
+    expect(result).toMatchObject({ analyzed: 2, failed: 0, skipped: 0 });
   });
 
   it("caps and deduplicates the snippets it sends", async () => {
@@ -118,7 +136,7 @@ describe("analyzeAudit — batching", () => {
     const result = await analyzeAudit("audit-1", [], deps({ client }));
 
     expect(client.analyzeIssueGroup).not.toHaveBeenCalled();
-    expect(result).toEqual({ analyzed: 0, failed: 0, skipped: 0 });
+    expect(result).toMatchObject({ analyzed: 0, failed: 0, skipped: 0 });
   });
 });
 
@@ -252,7 +270,7 @@ describe("analyzeAudit — caching", () => {
       deps({ client, redis: redis as never }),
     );
 
-    expect(result).toEqual({ analyzed: 1, failed: 0, skipped: 0 });
+    expect(result).toMatchObject({ analyzed: 1, failed: 0, skipped: 0 });
   });
 
   it("does not lose an answer it already paid for when the cache write fails", async () => {
@@ -266,7 +284,7 @@ describe("analyzeAudit — caching", () => {
       deps({ client, redis: redis as never }),
     );
 
-    expect(result).toEqual({ analyzed: 1, failed: 0, skipped: 0 });
+    expect(result).toMatchObject({ analyzed: 1, failed: 0, skipped: 0 });
     expect(setAnalysisForRule).toHaveBeenCalledOnce();
   });
 });
@@ -281,7 +299,7 @@ describe("analyzeAudit — best-effort contract", () => {
       deps({ client: client as never }),
     );
 
-    expect(result).toEqual({ analyzed: 0, failed: 1, skipped: 0 });
+    expect(result).toMatchObject({ analyzed: 0, failed: 1, skipped: 0 });
     expect(setAnalysisForRule).not.toHaveBeenCalled();
   });
 
@@ -299,7 +317,7 @@ describe("analyzeAudit — best-effort contract", () => {
       deps({ client: client as never }),
     );
 
-    expect(result).toEqual({ analyzed: 1, failed: 1, skipped: 0 });
+    expect(result).toMatchObject({ analyzed: 1, failed: 1, skipped: 0 });
   });
 
   it("does not fail the audit when writing the analysis to the DB fails", async () => {
@@ -334,7 +352,7 @@ describe("analyzeAudit — circuit breaker", () => {
 
     // One real failure, then the breaker's first refusal ends the loop —
     // the last two groups are never attempted.
-    expect(result).toEqual({ analyzed: 0, failed: 1, skipped: 3 });
+    expect(result).toMatchObject({ analyzed: 0, failed: 1, skipped: 3 });
     expect(client.analyzeIssueGroup).toHaveBeenCalledTimes(2);
   });
 
@@ -349,7 +367,112 @@ describe("analyzeAudit — circuit breaker", () => {
       deps({ client: client as never }),
     );
 
-    expect(result).toEqual({ analyzed: 0, failed: 0, skipped: 2 });
+    expect(result).toMatchObject({ analyzed: 0, failed: 0, skipped: 2 });
     expect(client.analyzeIssueGroup).toHaveBeenCalledOnce();
+  });
+});
+
+describe("analyzeAudit — cost telemetry", () => {
+  it("sums the tokens across every rule group", async () => {
+    const client = clientReturning();
+    const issues = [issue("image-alt", "<img>"), issue("label", "<input>")];
+
+    const result = await analyzeAudit("a", issues, deps({ client }));
+
+    expect(result.usage?.totalTokens).toBe(2040);
+    expect(result.cacheHits).toBe(0);
+  });
+
+  it("counts a cache hit as a hit and charges it nothing", async () => {
+    const redis = fakeRedis();
+    const issues = [issue("image-alt", "<img>")];
+
+    await analyzeAudit("a", issues, deps({ client: clientReturning(), redis: redis as never }));
+    const second = clientReturning();
+    const result = await analyzeAudit("b", issues, deps({ client: second, redis: redis as never }));
+
+    expect(second.analyzeIssueGroup).not.toHaveBeenCalled();
+    expect(result.cacheHits).toBe(1);
+    // Nothing was generated, so nothing was spent. The saving is the point of
+    // reporting hits next to tokens.
+    expect(result.usage).toBeNull();
+  });
+
+  it("still counts the tokens a failed group burned", async () => {
+    // The failure path is where cost telemetry earns its keep: four attempts
+    // that produced nothing were still four billed calls.
+    const client = clientReturning();
+    client.analyzeIssueGroup.mockRejectedValue(
+      new LlmAnalysisError(4, new Error("bad json"), usage(1000, 40)),
+    );
+
+    const result = await analyzeAudit("a", [issue("image-alt", "<img>")], deps({ client }));
+
+    expect(result.failed).toBe(1);
+    expect(result.usage?.totalTokens).toBe(1040);
+  });
+
+  it("finds the burned tokens on a wrapped error too", async () => {
+    const client = clientReturning();
+    client.analyzeIssueGroup.mockRejectedValue(
+      Object.assign(new Error("group failed"), {
+        cause: new LlmAnalysisError(2, new Error("nope"), usage(500, 20)),
+      }),
+    );
+
+    const result = await analyzeAudit("a", [issue("image-alt", "<img>")], deps({ client }));
+
+    expect(result.usage?.totalTokens).toBe(520);
+  });
+
+  it("keeps the tokens spent before the circuit opened", async () => {
+    const client = clientReturning();
+    client.analyzeIssueGroup
+      .mockResolvedValueOnce({ analysis, usage: usage(800, 100), costUsd: 0, attempts: 1 })
+      .mockRejectedValueOnce(new CircuitOpenError("open", 30_000));
+
+    const result = await analyzeAudit(
+      "a",
+      [issue("image-alt", "<img>"), issue("label", "<input>"), issue("link-name", "<a>")],
+      deps({ client }),
+    );
+
+    expect(result.skipped).toBe(2);
+    // The abandoned groups cost nothing, but the one that ran did.
+    expect(result.usage?.totalTokens).toBe(900);
+  });
+
+  it("prices the audit when a rate is configured", async () => {
+    const client = clientReturning(analysis, "prompt-a", usage(1_000_000, 1_000_000));
+
+    const result = await analyzeAudit(
+      "a",
+      [issue("image-alt", "<img>")],
+      deps({ client, prices: { inputPerMTok: 0.1, outputPerMTok: 0.5 } }),
+    );
+
+    expect(result.costUsd).toBeCloseTo(0.6);
+  });
+
+  it("reports a null cost, not a zero, when no rate is configured", async () => {
+    const client = clientReturning();
+
+    const result = await analyzeAudit(
+      "a",
+      [issue("image-alt", "<img>")],
+      deps({ client, prices: null }),
+    );
+
+    expect(result.usage?.totalTokens).toBe(1020);
+    expect(result.costUsd).toBeNull();
+  });
+
+  it("reports null usage when the provider never says what it used", async () => {
+    const client = clientReturning(analysis, "prompt-a", null);
+
+    const result = await analyzeAudit("a", [issue("image-alt", "<img>")], deps({ client }));
+
+    expect(result.analyzed).toBe(1);
+    expect(result.usage).toBeNull();
   });
 });

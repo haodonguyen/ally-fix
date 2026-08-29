@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { LlmClient, LlmConfig } from "@ally-fix/llm";
+import type { LlmAnalysisResult, LlmClient, LlmConfig } from "@ally-fix/llm";
 import type IORedis from "ioredis";
 
 const { markAuditRunning, insertIssues, completeAudit, failAudit, setAnalysisForRule } = vi.hoisted(
@@ -34,6 +34,14 @@ const analysis = {
   priority: "high" as const,
 };
 
+/** What the client hands back: the analysis plus what it cost to get. */
+const analysisResult: LlmAnalysisResult = {
+  analysis,
+  usage: { inputTokens: 900, outputTokens: 120, reasoningTokens: 0, totalTokens: 1020 },
+  costUsd: 0,
+  attempts: 1,
+};
+
 function issue(ruleId: string, impact: ScannedIssue["impact"]): ScannedIssue {
   return {
     ruleId,
@@ -56,7 +64,7 @@ function build(overrides: Partial<ProcessAuditDeps> = {}) {
   const scan = vi.fn<ProcessAuditDeps["scan"]>().mockResolvedValue([]);
   const llmClient: LlmClient = {
     promptFingerprint: "test",
-    analyzeIssueGroup: vi.fn().mockResolvedValue(analysis),
+    analyzeIssueGroup: vi.fn().mockResolvedValue(analysisResult),
   };
   const captured: CapturedLogger = createFakeLogger();
   const deps: ProcessAuditDeps = {
@@ -145,7 +153,7 @@ describe("the happy path", () => {
       promptFingerprint: "test",
       analyzeIssueGroup: vi.fn(async () => {
         order.push("analyze");
-        return analysis;
+        return analysisResult;
       }),
     };
     const { process } = build({

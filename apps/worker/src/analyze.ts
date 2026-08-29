@@ -2,9 +2,15 @@ import { createHash } from "node:crypto";
 import { setAnalysisForRule, type Database } from "@ally-fix/db";
 import {
   CircuitOpenError,
+  LlmAnalysisError,
   MAX_PROMPT_SNIPPETS,
+  addUsage,
+  estimateCostUsd,
   type LlmClient,
+  type LlmAnalysisResult,
   type LlmConfig,
+  type TokenPrices,
+  type TokenUsage,
 } from "@ally-fix/llm";
 import { llmIssueAnalysisSchema, type LlmIssueAnalysis } from "@ally-fix/shared";
 import type { Logger } from "@ally-fix/shared/logger";
@@ -17,6 +23,11 @@ export interface AnalyzeDeps {
   /** Only used to namespace the cache — the client owns the provider connection. */
   config: LlmConfig;
   cacheTtlSeconds: number;
+  /**
+   * Rate used to turn tokens into dollars in the audit summary. Null leaves the
+   * cost null — the tokens are still reported, because they were measured.
+   */
+  prices?: TokenPrices | null;
   /** Shared across audits, so its rate limiter and breaker see all traffic. */
   client: LlmClient;
   /** Already carrying the audit id, so per-rule lines stay correlated. */
@@ -28,6 +39,15 @@ export interface AnalyzeResult {
   failed: number;
   /** Groups never attempted because the circuit had already opened. */
   skipped: number;
+  /** Groups served from Redis, which cost no tokens at all. */
+  cacheHits: number;
+  /**
+   * Tokens this audit spent, including the ones burned by groups that failed.
+   * Null when nothing was generated, or when the provider reports no counts.
+   */
+  usage: TokenUsage | null;
+  /** Null when no rate is configured — never a zero standing in for "unknown". */
+  costUsd: number | null;
 }
 
 /**
@@ -46,15 +66,33 @@ export async function analyzeAudit(
   const groups = [...groupByRule(issues)];
   let analyzed = 0;
   let failed = 0;
+  let cacheHits = 0;
+  let usage: TokenUsage | null = null;
+
+  const spent = (): Pick<AnalyzeResult, "usage" | "costUsd"> => ({
+    usage,
+    costUsd: estimateCostUsd(usage, deps.prices ?? null),
+  });
 
   for (const [index, [ruleId, htmlSnippets]] of groups.entries()) {
     try {
-      const analysis = await getOrGenerate(ruleId, htmlSnippets, deps, () =>
+      const generated = await getOrGenerate(ruleId, htmlSnippets, deps, () =>
         deps.client.analyzeIssueGroup({ ruleId, htmlSnippets }),
       );
-      await setAnalysisForRule(deps.db, auditId, ruleId, analysis);
+      usage = addUsage(usage, generated.usage);
+      if (generated.cached) cacheHits++;
+
+      await setAnalysisForRule(deps.db, auditId, ruleId, generated.analysis);
       analyzed++;
     } catch (error) {
+      // Attempts that failed were still billed. Take their tokens off the error
+      // before deciding what to do with it, or a provider having a bad day looks
+      // cheaper than one working perfectly.
+      if (error instanceof LlmAnalysisError) usage = addUsage(usage, error.usage);
+      else if (error instanceof Error && error.cause instanceof LlmAnalysisError) {
+        usage = addUsage(usage, error.cause.usage);
+      }
+
       // An open circuit means the provider is down, not that this rule is
       // special: abandon the rest of the audit's analysis instead of logging the
       // same failure once per remaining group.
@@ -65,14 +103,14 @@ export async function analyzeAudit(
           analyzed,
           failed,
         });
-        return { analyzed, failed, skipped };
+        return { analyzed, failed, skipped, cacheHits, ...spent() };
       }
       failed++;
       deps.logger.warn("rule analysis failed", { ruleId, err: error });
     }
   }
 
-  return { analyzed, failed, skipped: 0 };
+  return { analyzed, failed, skipped: 0, cacheHits, ...spent() };
 }
 
 /** The client wraps the last failure, so the breaker's signal arrives as a cause. */
@@ -94,26 +132,51 @@ function groupByRule(issues: ScannedIssue[]): Map<string, string[]> {
   return groups;
 }
 
+/** One group's outcome, with what it cost. A cache hit costs nothing at all. */
+interface GeneratedAnalysis {
+  analysis: LlmIssueAnalysis;
+  usage: TokenUsage | null;
+  cached: boolean;
+}
+
 /** Look the analysis up in Redis; on a miss, generate it and cache the result. */
 async function getOrGenerate(
   ruleId: string,
   htmlSnippets: string[],
   deps: AnalyzeDeps,
-  generate: () => Promise<LlmIssueAnalysis>,
-): Promise<LlmIssueAnalysis> {
+  generate: () => Promise<LlmAnalysisResult>,
+): Promise<GeneratedAnalysis> {
   const key = buildCacheKey(deps, ruleId, htmlSnippets);
 
   const cached = await readCache(deps.redis, key);
-  if (cached) return cached;
+  // A hit is genuinely free, so its usage is a measured zero rather than null.
+  // That distinction is what lets the summary say how much the cache saved.
+  if (cached) return { analysis: cached, usage: null, cached: true };
 
-  const analysis = await generate();
+  const result = await generate();
+  deps.logger.debug("rule analysed", {
+    ruleId,
+    attempts: result.attempts,
+    inputTokens: result.usage?.inputTokens ?? null,
+    outputTokens: result.usage?.outputTokens ?? null,
+    costUsd: roundUsd(result.costUsd),
+  });
+
   // A cache write must never lose an answer we already paid for.
   try {
-    await deps.redis.set(key, JSON.stringify(analysis), "EX", deps.cacheTtlSeconds);
+    await deps.redis.set(key, JSON.stringify(result.analysis), "EX", deps.cacheTtlSeconds);
   } catch (error) {
     deps.logger.warn("could not cache analysis", { ruleId, err: error });
   }
-  return analysis;
+  return { analysis: result.analysis, usage: result.usage, cached: false };
+}
+
+/**
+ * Costs are fractions of a cent, and raw floats log as `0.00013800000000000002`.
+ * Six decimal places is a hundredth of a cent — finer than anything is billed at.
+ */
+export function roundUsd(costUsd: number | null): number | null {
+  return costUsd === null ? null : Math.round(costUsd * 1e6) / 1e6;
 }
 
 /**
