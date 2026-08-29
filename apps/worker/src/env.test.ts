@@ -121,6 +121,29 @@ describe("resolveLlmClientOptions", () => {
     expect(resolveLlmClientOptions(groq).requestsPerMinute).toBe(12);
   });
 
+  it("grounds prompts by default", () => {
+    expect(resolveLlmClientOptions(ollama).grounded).toBe(true);
+  });
+
+  it("lets an explicit falsy value turn grounding off, for the comparison run", () => {
+    for (const value of ["false", "0", "no", "off", "FALSE"]) {
+      vi.stubEnv("LLM_GROUNDING", value);
+      expect(resolveLlmClientOptions(ollama).grounded).toBe(false);
+    }
+    for (const value of ["true", "1", "yes", "on"]) {
+      vi.stubEnv("LLM_GROUNDING", value);
+      expect(resolveLlmClientOptions(ollama).grounded).toBe(true);
+    }
+  });
+
+  it("keeps grounding on when the value is unrecognised", () => {
+    // A typo must not quietly ship the ungrounded prompt to production.
+    for (const value of ["", "  ", "maybe", "flase"]) {
+      vi.stubEnv("LLM_GROUNDING", value);
+      expect(resolveLlmClientOptions(ollama).grounded).toBe(true);
+    }
+  });
+
   it("ignores a garbage value instead of silently disabling a timeout", () => {
     // The trap this guards: Number("30s") is NaN, and a NaN timeout never fires.
     vi.stubEnv("LLM_TIMEOUT_MS", "30s");

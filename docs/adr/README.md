@@ -16,6 +16,8 @@ sequence of decisions is the point; a tidied-up ADR is just documentation.
 | [0003](./0003-two-layer-ssrf-protection.md)    | Enforce SSRF protection at scan time, not only at the API                | Accepted |
 | [0004](./0004-llm-analysis-is-best-effort.md)  | LLM analysis is best-effort and must never fail a scan                   | Accepted |
 | [0005](./0005-two-axis-llm-error-taxonomy.md)  | Classify LLM failures on two independent axes                            | Accepted |
+| [0006](./0006-structured-logging.md)           | Log structured records, with a hand-written logger                       | Accepted |
+| [0007](./0007-ground-prompts-in-wcag.md)       | Ground prompts in the standard, at criterion level only                  | Accepted |
 
 ## Format
 

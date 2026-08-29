@@ -10,7 +10,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "echo \"no tests yet\" && exit 0"
+    "test": "echo \"no tests yet\" && exit 0",
+    "grounding:generate": "tsx scripts/generate-axe-rules.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^4.0.8",
@@ -20,6 +21,8 @@
     "ollama-ai-provider-v2": "^3.6.0"
   },
   "devDependencies": {
-    "@types/node": "^26.1.0"
+    "@types/node": "^26.1.0",
+    "axe-core": "^4.12.1",
+    "tsx": "^4.23.0"
   }
 }

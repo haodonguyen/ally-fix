@@ -56,8 +56,9 @@ function deps(overrides: Partial<AnalyzeDeps> & { client: LlmClient }): AnalyzeD
 
 function clientReturning(
   value = analysis,
+  promptFingerprint = "prompt-a",
 ): LlmClient & { analyzeIssueGroup: ReturnType<typeof vi.fn> } {
-  return { analyzeIssueGroup: vi.fn().mockResolvedValue(value) } as never;
+  return { promptFingerprint, analyzeIssueGroup: vi.fn().mockResolvedValue(value) } as never;
 }
 
 beforeEach(() => {
@@ -174,6 +175,20 @@ describe("analyzeAudit — caching", () => {
 
     // A different model must not inherit the first model's answer.
     expect(groq.analyzeIssueGroup).toHaveBeenCalledOnce();
+    expect(redis.store.size).toBe(2);
+  });
+
+  it("keeps separate cache entries per prompt", async () => {
+    const redis = fakeRedis();
+    const issues = [issue("image-alt", "<img>")];
+
+    await analyzeAudit("a", issues, deps({ client: clientReturning(), redis: redis as never }));
+    // Same provider, same model, same markup — but the prompt changed, so the
+    // stored answer belongs to a prompt that is no longer being sent.
+    const reworded = clientReturning(analysis, "prompt-b");
+    await analyzeAudit("b", issues, deps({ client: reworded, redis: redis as never }));
+
+    expect(reworded.analyzeIssueGroup).toHaveBeenCalledOnce();
     expect(redis.store.size).toBe(2);
   });
 

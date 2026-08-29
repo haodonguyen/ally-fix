@@ -101,7 +101,7 @@ async function getOrGenerate(
   deps: AnalyzeDeps,
   generate: () => Promise<LlmIssueAnalysis>,
 ): Promise<LlmIssueAnalysis> {
-  const key = buildCacheKey(deps.config, ruleId, htmlSnippets);
+  const key = buildCacheKey(deps, ruleId, htmlSnippets);
 
   const cached = await readCache(deps.redis, key);
   if (cached) return cached;
@@ -139,12 +139,18 @@ async function readCache(redis: IORedis, key: string): Promise<LlmIssueAnalysis 
 }
 
 /**
- * Cache key = provider + model + rule + a hash of the HTML pattern. Keying on the
- * HTML lets the same rule + markup pattern reuse an answer across audits, while
- * different providers/models keep separate caches.
+ * Cache key = provider + model + prompt + rule + a hash of the HTML pattern.
+ * Keying on the HTML lets the same rule + markup pattern reuse an answer across
+ * audits, while different providers/models keep separate caches.
+ *
+ * The prompt fingerprint is in there because an answer belongs to the prompt
+ * that produced it. Without it, a prompt change would keep serving answers from
+ * the old one for the full 30-day TTL — long enough to make a shipped change
+ * look like it did nothing.
  */
-function buildCacheKey(config: LlmConfig, ruleId: string, htmlSnippets: string[]): string {
+function buildCacheKey(deps: AnalyzeDeps, ruleId: string, htmlSnippets: string[]): string {
   const pattern = htmlSnippets.join("\n").replace(/\s+/g, " ").trim();
   const hash = createHash("sha256").update(pattern).digest("hex").slice(0, 16);
-  return `llm:v1:${config.provider}:${config.model}:${ruleId}:${hash}`;
+  const { provider, model } = deps.config;
+  return `llm:v1:${provider}:${model}:${deps.client.promptFingerprint}:${ruleId}:${hash}`;
 }

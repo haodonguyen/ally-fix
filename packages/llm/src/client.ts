@@ -8,7 +8,7 @@ import {
   LlmValidationError,
   classifyProviderError,
 } from "./errors";
-import { ANALYSIS_SYSTEM_PROMPT, buildAnalysisPrompt } from "./prompt";
+import { analysisSystemPrompt, buildAnalysisPrompt, promptFingerprint } from "./prompt";
 import { resolveModel } from "./providers";
 import { createTokenBucket, noopThrottle, type Throttle } from "./throttle";
 import type { IssueGroupInput, LlmClient, LlmConfig } from "./types";
@@ -42,6 +42,11 @@ export interface CreateLlmClientOptions {
   circuitBreakerThreshold?: number;
   /** How long the circuit stays open before probing again. Default 30s. */
   circuitBreakerResetMs?: number;
+  /**
+   * Put the WCAG and axe reference material for the rule into the prompt.
+   * Default true. The eval flips it to measure what grounding is worth.
+   */
+  grounded?: boolean;
   /** Test seams. */
   generate?: SingleShotGenerate;
   throttle?: Throttle;
@@ -166,6 +171,8 @@ export function createLlmClient(
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const sleep = options.sleep ?? defaultSleep;
   const random = options.random ?? Math.random;
+  const grounded = options.grounded ?? true;
+  const system = analysisSystemPrompt(grounded);
 
   const throttle =
     options.throttle ??
@@ -201,7 +208,7 @@ export function createLlmClient(
     await throttle.acquire();
 
     const raw = await withTimeout(timeoutMs, (signal) =>
-      generate({ system: ANALYSIS_SYSTEM_PROMPT, prompt, signal }),
+      generate({ system, prompt, signal }),
     ).catch((error: unknown) => {
       // Anything thrown by the provider becomes a typed provider error, so the
       // breaker and the retry loop can classify it without duck-typing.
@@ -215,8 +222,10 @@ export function createLlmClient(
   }
 
   return {
+    promptFingerprint: promptFingerprint(grounded),
+
     async analyzeIssueGroup(input: IssueGroupInput): Promise<LlmIssueAnalysis> {
-      const prompt = buildAnalysisPrompt(input);
+      const prompt = buildAnalysisPrompt(input, { grounded });
       let lastError: unknown;
       let attempts = 0;
 
