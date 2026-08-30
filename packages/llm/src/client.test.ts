@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { backoffDelay, coerceRawOutput, createLlmClient } from "./client";
 import { createCircuitBreaker } from "./circuit-breaker";
 import { CircuitOpenError, LlmProviderError, LlmTimeoutError, LlmValidationError } from "./errors";
-import type { SingleShotGenerate } from "./client";
+import type { SingleShotGenerate, SingleShotResult } from "./client";
+import type { TokenUsage } from "./usage";
 import type { Throttle } from "./throttle";
 import type { LlmConfig } from "./types";
 
@@ -17,23 +18,37 @@ const validAnalysis = {
 
 const group = { ruleId: "image-alt", htmlSnippets: ["<img>"] };
 
+/** Wraps a raw model output in the shape the provider seam actually returns. */
+function answer(output: unknown, usage: TokenUsage | null = null): SingleShotResult {
+  return { output, usage };
+}
+
+function usage(inputTokens: number, outputTokens: number, reasoningTokens = 0): TokenUsage {
+  return {
+    inputTokens,
+    outputTokens,
+    reasoningTokens,
+    totalTokens: inputTokens + outputTokens,
+  };
+}
+
 /** Defaults that keep the suite instant: no backoff waits, breaker out of the way. */
 const fast = { retryDelayMs: 0, circuitBreakerThreshold: 0 } as const;
 
 describe("createLlmClient.analyzeIssueGroup", () => {
   it("returns a schema-validated analysis on the first try", async () => {
-    const generate = vi.fn().mockResolvedValue(validAnalysis);
+    const generate = vi.fn().mockResolvedValue(answer(validAnalysis));
     const client = createLlmClient(config, { ...fast, generate });
 
     const result = await client.analyzeIssueGroup(group);
 
-    expect(result.priority).toBe("high");
-    expect(result.affectedUsers).toEqual(["screen reader users"]);
+    expect(result.analysis.priority).toBe("high");
+    expect(result.analysis.affectedUsers).toEqual(["screen reader users"]);
     expect(generate).toHaveBeenCalledOnce();
   });
 
   it("passes the rule's prompt and an abort signal to the provider", async () => {
-    const generate = vi.fn().mockResolvedValue(validAnalysis);
+    const generate = vi.fn().mockResolvedValue(answer(validAnalysis));
     const client = createLlmClient(config, { ...fast, generate });
 
     await client.analyzeIssueGroup(group);
@@ -47,18 +62,18 @@ describe("createLlmClient.analyzeIssueGroup", () => {
   it("retries when the model returns something that fails the schema", async () => {
     const generate = vi
       .fn()
-      .mockResolvedValueOnce({ not: "valid" })
-      .mockResolvedValueOnce(validAnalysis);
+      .mockResolvedValueOnce(answer({ not: "valid" }))
+      .mockResolvedValueOnce(answer(validAnalysis));
     const client = createLlmClient(config, { ...fast, generate, maxRetries: 2 });
 
     const result = await client.analyzeIssueGroup(group);
 
-    expect(result.explanation).toContain("alternative text");
+    expect(result.analysis.explanation).toContain("alternative text");
     expect(generate).toHaveBeenCalledTimes(2);
   });
 
   it("throws after exhausting retries, reporting the real attempt count", async () => {
-    const generate = vi.fn().mockResolvedValue({ still: "invalid" });
+    const generate = vi.fn().mockResolvedValue(answer({ still: "invalid" }));
     const client = createLlmClient(config, { ...fast, generate, maxRetries: 1 });
 
     await expect(client.analyzeIssueGroup(group)).rejects.toThrow(/failed after 2 attempt/);
@@ -88,7 +103,10 @@ describe("createLlmClient.analyzeIssueGroup", () => {
       statusCode: 408,
       isRetryable: true,
     });
-    const generate = vi.fn().mockRejectedValueOnce(timeout).mockResolvedValueOnce(validAnalysis);
+    const generate = vi
+      .fn()
+      .mockRejectedValueOnce(timeout)
+      .mockResolvedValueOnce(answer(validAnalysis));
     const client = createLlmClient(config, { ...fast, generate, maxRetries: 3 });
 
     await client.analyzeIssueGroup(group);
@@ -100,12 +118,12 @@ describe("createLlmClient.analyzeIssueGroup", () => {
     const generate = vi
       .fn()
       .mockRejectedValueOnce(rateLimited)
-      .mockResolvedValueOnce(validAnalysis);
+      .mockResolvedValueOnce(answer(validAnalysis));
     const client = createLlmClient(config, { ...fast, generate, maxRetries: 3 });
 
     const result = await client.analyzeIssueGroup(group);
 
-    expect(result.priority).toBe("high");
+    expect(result.analysis.priority).toBe("high");
     expect(generate).toHaveBeenCalledTimes(2);
   });
 
@@ -123,7 +141,7 @@ describe("createLlmClient.analyzeIssueGroup", () => {
 describe("schema validation of the model's output", () => {
   /** Runs one bad payload through the client with retries off. */
   async function reject(raw: unknown) {
-    const generate = vi.fn().mockResolvedValue(raw);
+    const generate = vi.fn().mockResolvedValue(answer(raw));
     const client = createLlmClient(config, { ...fast, generate, maxRetries: 0 });
     return client.analyzeIssueGroup(group).catch((error: unknown) => error);
   }
@@ -148,21 +166,23 @@ describe("schema validation of the model's output", () => {
   it("accepts a valid object and strips unknown extra fields", async () => {
     const generate = vi
       .fn()
-      .mockResolvedValue({ ...validAnalysis, confidence: 0.9, notes: "ignore me" });
+      .mockResolvedValue(answer({ ...validAnalysis, confidence: 0.9, notes: "ignore me" }));
     const client = createLlmClient(config, { ...fast, generate, maxRetries: 0 });
 
     const result = await client.analyzeIssueGroup(group);
 
-    expect(result).toEqual(validAnalysis);
-    expect(result).not.toHaveProperty("confidence");
+    expect(result.analysis).toEqual(validAnalysis);
+    expect(result.analysis).not.toHaveProperty("confidence");
   });
 
   it("recovers JSON a local model wrapped in a markdown fence", async () => {
     const fenced = "```json\n" + JSON.stringify(validAnalysis) + "\n```";
-    const generate = vi.fn().mockResolvedValue(fenced);
+    const generate = vi.fn().mockResolvedValue(answer(fenced));
     const client = createLlmClient(config, { ...fast, generate, maxRetries: 0 });
 
-    await expect(client.analyzeIssueGroup(group)).resolves.toEqual(validAnalysis);
+    await expect(client.analyzeIssueGroup(group)).resolves.toMatchObject({
+      analysis: validAnalysis,
+    });
     // One call: the unwrap saved a retry rather than burning an attempt.
     expect(generate).toHaveBeenCalledOnce();
   });
@@ -189,7 +209,7 @@ describe("per-attempt timeout", () => {
   it("aborts a request that never settles and reports it as a timeout", async () => {
     // A provider that ignores the abort signal entirely — the deadline must
     // still fire, or a hung socket would stall the worker forever.
-    const generate = vi.fn(() => new Promise(() => undefined));
+    const generate = vi.fn(() => new Promise<SingleShotResult>(() => undefined));
     const client = createLlmClient(config, {
       ...fast,
       generate,
@@ -205,7 +225,7 @@ describe("per-attempt timeout", () => {
     let aborted = false;
     const generate = vi.fn(
       ({ signal }: { signal: AbortSignal }) =>
-        new Promise((_, rejectPromise) => {
+        new Promise<SingleShotResult>((_, rejectPromise) => {
           signal.addEventListener("abort", () => {
             aborted = true;
             rejectPromise(
@@ -228,11 +248,13 @@ describe("per-attempt timeout", () => {
   it("retries after a timeout and can still succeed", async () => {
     const generate = vi
       .fn()
-      .mockImplementationOnce(() => new Promise(() => undefined))
-      .mockResolvedValueOnce(validAnalysis);
+      .mockImplementationOnce(() => new Promise<SingleShotResult>(() => undefined))
+      .mockResolvedValueOnce(answer(validAnalysis));
     const client = createLlmClient(config, { ...fast, generate, timeoutMs: 10, maxRetries: 1 });
 
-    await expect(client.analyzeIssueGroup(group)).resolves.toEqual(validAnalysis);
+    await expect(client.analyzeIssueGroup(group)).resolves.toMatchObject({
+      analysis: validAnalysis,
+    });
     expect(generate).toHaveBeenCalledTimes(2);
   });
 
@@ -272,10 +294,12 @@ describe("per-attempt timeout", () => {
   });
 
   it("does not arm a deadline when the timeout is disabled", async () => {
-    const generate = vi.fn().mockResolvedValue(validAnalysis);
+    const generate = vi.fn().mockResolvedValue(answer(validAnalysis));
     const client = createLlmClient(config, { ...fast, generate, timeoutMs: 0 });
 
-    await expect(client.analyzeIssueGroup(group)).resolves.toEqual(validAnalysis);
+    await expect(client.analyzeIssueGroup(group)).resolves.toMatchObject({
+      analysis: validAnalysis,
+    });
   });
 });
 
@@ -310,9 +334,9 @@ describe("outbound rate limiting", () => {
     const throttle: Throttle = { acquire };
     const generate = vi
       .fn()
-      .mockResolvedValueOnce({ bad: true })
-      .mockResolvedValueOnce({ bad: true })
-      .mockResolvedValueOnce(validAnalysis);
+      .mockResolvedValueOnce(answer({ bad: true }))
+      .mockResolvedValueOnce(answer({ bad: true }))
+      .mockResolvedValueOnce(answer(validAnalysis));
     const client = createLlmClient(config, { ...fast, generate, throttle, maxRetries: 2 });
 
     await client.analyzeIssueGroup(group);
@@ -323,10 +347,12 @@ describe("outbound rate limiting", () => {
   });
 
   it("builds a real bucket from requestsPerMinute without any provider call", async () => {
-    const generate = vi.fn().mockResolvedValue(validAnalysis);
+    const generate = vi.fn().mockResolvedValue(answer(validAnalysis));
     const client = createLlmClient(config, { ...fast, generate, requestsPerMinute: 600 });
 
-    await expect(client.analyzeIssueGroup(group)).resolves.toEqual(validAnalysis);
+    await expect(client.analyzeIssueGroup(group)).resolves.toMatchObject({
+      analysis: validAnalysis,
+    });
   });
 });
 
@@ -355,7 +381,7 @@ describe("circuit breaker integration", () => {
   });
 
   it("keeps the circuit closed when only the model's output is bad", async () => {
-    const generate = vi.fn().mockResolvedValue({ garbage: true });
+    const generate = vi.fn().mockResolvedValue(answer({ garbage: true }));
     const breaker = createCircuitBreaker({ failureThreshold: 2, resetTimeoutMs: 60_000 });
     const client = createLlmClient(config, {
       generate,
@@ -375,7 +401,7 @@ describe("circuit breaker integration", () => {
     const generate = vi
       .fn()
       .mockRejectedValueOnce(new Error("ECONNREFUSED"))
-      .mockResolvedValue(validAnalysis);
+      .mockResolvedValue(answer(validAnalysis));
     const breaker = createCircuitBreaker({
       failureThreshold: 1,
       resetTimeoutMs: 1000,
@@ -392,7 +418,112 @@ describe("circuit breaker integration", () => {
     expect(breaker.state).toBe("open");
 
     t += 1000; // the reset window elapses
-    await expect(client.analyzeIssueGroup(group)).resolves.toEqual(validAnalysis);
+    await expect(client.analyzeIssueGroup(group)).resolves.toMatchObject({
+      analysis: validAnalysis,
+    });
     expect(breaker.state).toBe("closed");
+  });
+});
+
+describe("token accounting", () => {
+  it("reports what the successful call consumed", async () => {
+    const generate = vi.fn().mockResolvedValue(answer(validAnalysis, usage(900, 120)));
+    const client = createLlmClient(config, { ...fast, generate });
+
+    const result = await client.analyzeIssueGroup(group);
+
+    expect(result.usage).toEqual({
+      inputTokens: 900,
+      outputTokens: 120,
+      reasoningTokens: 0,
+      totalTokens: 1020,
+    });
+    expect(result.attempts).toBe(1);
+  });
+
+  it("bills the attempts that failed validation, not only the one that worked", async () => {
+    // The trap: a malformed answer was still generated and still charged for.
+    // Counting only the successful attempt makes retries look free — exactly
+    // when the bill is climbing.
+    const generate = vi
+      .fn()
+      .mockResolvedValueOnce(answer({ bad: true }, usage(900, 40)))
+      .mockResolvedValueOnce(answer(validAnalysis, usage(900, 120)));
+    const client = createLlmClient(config, { ...fast, generate, maxRetries: 2 });
+
+    const result = await client.analyzeIssueGroup(group);
+
+    expect(result.attempts).toBe(2);
+    expect(result.usage?.inputTokens).toBe(1800);
+    expect(result.usage?.totalTokens).toBe(1960);
+  });
+
+  it("carries the wasted tokens out on the error when every attempt fails", async () => {
+    const generate = vi.fn().mockResolvedValue(answer({ bad: true }, usage(500, 30)));
+    const client = createLlmClient(config, { ...fast, generate, maxRetries: 2 });
+
+    const error = (await client.analyzeIssueGroup(group).catch((e: unknown) => e)) as {
+      usage: TokenUsage | null;
+    };
+
+    // Three attempts were paid for and produced nothing. That is the number an
+    // operator most wants to see, so it must not be dropped on the floor.
+    expect(error.usage?.totalTokens).toBe(1590);
+  });
+
+  it("reports null usage when the provider never says", async () => {
+    const generate = vi.fn().mockResolvedValue(answer(validAnalysis));
+    const client = createLlmClient(config, { ...fast, generate });
+
+    const result = await client.analyzeIssueGroup(group);
+
+    expect(result.usage).toBeNull();
+    expect(result.costUsd).toBeNull();
+  });
+
+  it("costs a local Ollama call at zero without being told a price", async () => {
+    const generate = vi.fn().mockResolvedValue(answer(validAnalysis, usage(900, 120)));
+    const client = createLlmClient(config, { ...fast, generate });
+
+    await expect(client.analyzeIssueGroup(group)).resolves.toMatchObject({ costUsd: 0 });
+  });
+
+  it("reports a null cost for a hosted model with no configured rate", async () => {
+    const generate = vi.fn().mockResolvedValue(answer(validAnalysis, usage(900, 120)));
+    const client = createLlmClient(
+      { provider: "groq", model: "openai/gpt-oss-20b" },
+      { ...fast, generate },
+    );
+
+    const result = await client.analyzeIssueGroup(group);
+
+    expect(result.usage?.totalTokens).toBe(1020);
+    // Tokens are always known; the price is not. Reporting 0 here would put a
+    // free line in a cost dashboard for a call that was billed.
+    expect(result.costUsd).toBeNull();
+  });
+
+  it("uses the rate the operator supplied", async () => {
+    const generate = vi.fn().mockResolvedValue(answer(validAnalysis, usage(1_000_000, 1_000_000)));
+    const client = createLlmClient(
+      { provider: "groq", model: "openai/gpt-oss-20b" },
+      { ...fast, generate, prices: { inputPerMTok: 0.1, outputPerMTok: 0.5 } },
+    );
+
+    await expect(client.analyzeIssueGroup(group)).resolves.toMatchObject({
+      costUsd: expect.closeTo(0.6),
+    });
+  });
+
+  it("prefers an explicit option over the price on the config", async () => {
+    const generate = vi.fn().mockResolvedValue(answer(validAnalysis, usage(1_000_000, 0)));
+    const client = createLlmClient(
+      { provider: "groq", model: "m", prices: { inputPerMTok: 9, outputPerMTok: 9 } },
+      { ...fast, generate, prices: { inputPerMTok: 1, outputPerMTok: 1 } },
+    );
+
+    await expect(client.analyzeIssueGroup(group)).resolves.toMatchObject({
+      costUsd: expect.closeTo(1),
+    });
   });
 });

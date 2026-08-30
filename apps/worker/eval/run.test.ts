@@ -4,7 +4,9 @@ import type { EvalCase } from "./cases";
 import {
   compareArms,
   formatComparison,
+  formatCost,
   formatReport,
+  formatTokens,
   runCase,
   runEval,
   summarise,
@@ -21,6 +23,21 @@ const IMAGE_CASE: EvalCase = {
   html: '<img src="/cat.png">',
   expectation: "adds a descriptive alt attribute",
 };
+
+/** Wraps an analysis in the shape the client returns, with plausible usage. */
+function answered(analysis: LlmIssueAnalysis, inputTokens = 900, outputTokens = 120) {
+  return {
+    analysis,
+    usage: {
+      inputTokens,
+      outputTokens,
+      reasoningTokens: 0,
+      totalTokens: inputTokens + outputTokens,
+    },
+    costUsd: 0,
+    attempts: 1,
+  };
+}
 
 function analysis(fixCode: string): LlmIssueAnalysis {
   return {
@@ -49,7 +66,9 @@ function deps(overrides: Partial<EvalDeps> & Pick<EvalDeps, "verifier">): EvalDe
   let t = 0;
   return {
     client: {
-      analyzeIssueGroup: vi.fn().mockResolvedValue(analysis('<img src="/cat.png" alt="A cat">')),
+      analyzeIssueGroup: vi
+        .fn()
+        .mockResolvedValue(answered(analysis('<img src="/cat.png" alt="A cat">'))),
     },
     now: () => (t += 40),
     ...overrides,
@@ -83,7 +102,7 @@ describe("scoring one case", () => {
       IMAGE_CASE,
       deps({
         verifier: fakeVerifier("violates", "passes"),
-        client: { analyzeIssueGroup: vi.fn().mockResolvedValue(analysis("<div></div>")) },
+        client: { analyzeIssueGroup: vi.fn().mockResolvedValue(answered(analysis("<div></div>"))) },
       }),
     );
 
@@ -99,7 +118,7 @@ describe("scoring one case", () => {
       removalCase,
       deps({
         verifier: fakeVerifier("violates", "passes"),
-        client: { analyzeIssueGroup: vi.fn().mockResolvedValue(analysis("<div></div>")) },
+        client: { analyzeIssueGroup: vi.fn().mockResolvedValue(answered(analysis("<div></div>"))) },
       }),
     );
 
@@ -111,7 +130,9 @@ describe("scoring one case", () => {
       IMAGE_CASE,
       deps({
         verifier: fakeVerifier("violates"),
-        client: { analyzeIssueGroup: vi.fn().mockResolvedValue(analysis("Add an alt attribute.")) },
+        client: {
+          analyzeIssueGroup: vi.fn().mockResolvedValue(answered(analysis("Add an alt attribute."))),
+        },
       }),
     );
 
@@ -228,8 +249,21 @@ describe("runEval", () => {
 // ── A/B comparison ───────────────────────────────────────────────────────────
 
 /** A CaseResult with only the fields the arm/comparison maths reads. */
-function result(id: string, verdict: CaseVerdict, latencyMs = 100): CaseResult {
-  return { case: { ...IMAGE_CASE, id }, verdict, latencyMs };
+function result(
+  id: string,
+  verdict: CaseVerdict,
+  latencyMs = 100,
+  spent: { inputTokens: number; outputTokens: number } | null = null,
+): CaseResult {
+  const usage =
+    spent === null
+      ? null
+      : {
+          ...spent,
+          reasoningTokens: 0,
+          totalTokens: spent.inputTokens + spent.outputTokens,
+        };
+  return { case: { ...IMAGE_CASE, id }, verdict, latencyMs, usage, costUsd: null };
 }
 
 describe("summariseArm", () => {
@@ -317,5 +351,77 @@ describe("formatComparison", () => {
   it("says so plainly when nothing moved", () => {
     const report = formatComparison(compareArms(baseline, baseline));
     expect(report).toContain("no case changed verdict");
+  });
+});
+
+describe("cost reporting", () => {
+  it("adds up what the run spent", async () => {
+    const results = await runEval(
+      deps({ verifier: fakeVerifier("violates", "passes"), cases: [IMAGE_CASE] }),
+    );
+    expect(summarise(results).usage?.totalTokens).toBe(1020);
+  });
+
+  it("charges nothing for a broken case, which never called the model", async () => {
+    const results = await runEval(deps({ verifier: fakeVerifier("passes"), cases: [IMAGE_CASE] }));
+    expect(results[0]?.verdict).toBe("broken-case");
+    expect(summarise(results).usage).toBeNull();
+  });
+
+  it("reports a null cost rather than zero when no rate is configured", () => {
+    const board = summarise([result("a", "resolved", 10, { inputTokens: 900, outputTokens: 100 })]);
+    expect(board.usage?.totalTokens).toBe(1000);
+    expect(board.costUsd).toBeNull();
+  });
+
+  it("sums the priced cases rather than re-deriving a total from a rate", () => {
+    // A run that mixes priced and unpriced calls must not report the unpriced
+    // half as free, and must not throw away the half it does know.
+    const priced = { ...result("a", "resolved"), costUsd: 0.002 };
+    const unpriced = result("b", "resolved");
+    expect(summarise([priced, unpriced]).costUsd).toBeCloseTo(0.002);
+  });
+});
+
+describe("formatTokens / formatCost", () => {
+  it("says a provider reported nothing instead of printing zeroes", () => {
+    expect(formatTokens(null)).toContain("not reported");
+  });
+
+  it("never prints an unpriced run as $0.00", () => {
+    // "$0.00" and "we do not know" are different facts, and only one of them
+    // belongs in a sentence about money.
+    expect(formatCost(null)).toContain("no rate configured");
+    expect(formatCost(0)).toBe("$0.0000");
+  });
+});
+
+describe("comparing what a prompt costs", () => {
+  const cheap = summariseArm("ungrounded", [
+    [result("a", "not-resolved", 10, { inputTokens: 200, outputTokens: 100 })],
+  ]);
+  const rich = summariseArm("grounded", [
+    [result("a", "resolved", 10, { inputTokens: 450, outputTokens: 100 })],
+  ]);
+
+  it("reports how much bigger the candidate's prompt is", () => {
+    const comparison = compareArms(cheap, rich);
+    expect(comparison.inputTokenOverhead).toBeCloseTo(1.25);
+    expect(formatComparison(comparison)).toContain("+125.0% per call");
+  });
+
+  it("stays silent about overhead when a provider reported no usage", () => {
+    const silent = summariseArm("ungrounded", [[result("a", "not-resolved")]]);
+    const comparison = compareArms(silent, rich);
+    expect(comparison.inputTokenOverhead).toBeNull();
+    expect(formatComparison(comparison)).not.toContain("per call");
+  });
+
+  it("puts the cost of the win next to the win", () => {
+    // The question is never "did it help?" but "did it help enough to be worth
+    // what it costs?" — so both numbers have to be on screen together.
+    const report = formatComparison(compareArms(cheap, rich));
+    expect(report).toContain("delta");
+    expect(report).toContain("input tokens");
   });
 });

@@ -1,7 +1,15 @@
 /** Public surface of @ally-fix/llm. */
-export type { LlmProviderName, LlmConfig, IssueGroupInput, LlmClient } from "./types";
+export type {
+  LlmProviderName,
+  LlmConfig,
+  IssueGroupInput,
+  LlmAnalysisResult,
+  LlmClient,
+} from "./types";
 export { createLlmClient, backoffDelay, coerceRawOutput } from "./client";
-export type { CreateLlmClientOptions, SingleShotGenerate } from "./client";
+export type { CreateLlmClientOptions, SingleShotGenerate, SingleShotResult } from "./client";
+export { readUsage, addUsage, estimateCostUsd, defaultPricesFor, EMPTY_USAGE } from "./usage";
+export type { TokenUsage, TokenPrices } from "./usage";
 export {
   buildAnalysisPrompt,
   analysisSystemPrompt,

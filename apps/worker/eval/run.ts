@@ -1,4 +1,4 @@
-import type { LlmClient } from "@ally-fix/llm";
+import { addUsage, type LlmClient, type TokenUsage } from "@ally-fix/llm";
 import type { LlmIssueAnalysis } from "@ally-fix/shared";
 import { EVAL_CASES, type EvalCase } from "./cases";
 import { runStaticChecks, type StaticCheckResult } from "./checks";
@@ -22,6 +22,9 @@ export interface CaseResult {
   case: EvalCase;
   verdict: CaseVerdict;
   latencyMs: number;
+  /** Tokens the case consumed, retries included. Null when the provider is silent. */
+  usage?: TokenUsage | null;
+  costUsd?: number | null;
   checks?: StaticCheckResult;
   analysis?: LlmIssueAnalysis;
   detail?: string;
@@ -56,11 +59,16 @@ export async function runCase(evalCase: EvalCase, deps: EvalDeps): Promise<CaseR
 
   const startedAt = now();
   let analysis: LlmIssueAnalysis;
+  let usage: TokenUsage | null;
+  let costUsd: number | null;
   try {
-    analysis = await deps.client.analyzeIssueGroup({
+    const result = await deps.client.analyzeIssueGroup({
       ruleId: evalCase.ruleId,
       htmlSnippets: [evalCase.html],
     });
+    analysis = result.analysis;
+    usage = result.usage;
+    costUsd = result.costUsd;
   } catch (error) {
     return {
       case: evalCase,
@@ -73,7 +81,15 @@ export async function runCase(evalCase: EvalCase, deps: EvalDeps): Promise<CaseR
 
   const checks = runStaticChecks(evalCase.html, analysis, evalCase.subjectTag);
   if (!checks.fixParses) {
-    return { case: evalCase, verdict: "unparseable-fix", latencyMs, checks, analysis };
+    return {
+      case: evalCase,
+      verdict: "unparseable-fix",
+      latencyMs,
+      usage,
+      costUsd,
+      checks,
+      analysis,
+    };
   }
 
   const after = await deps.verifier.check(analysis.fixCode, evalCase.ruleId);
@@ -82,6 +98,8 @@ export async function runCase(evalCase: EvalCase, deps: EvalDeps): Promise<CaseR
       case: evalCase,
       verdict: "not-resolved",
       latencyMs,
+      usage,
+      costUsd,
       checks,
       analysis,
       detail:
@@ -97,13 +115,15 @@ export async function runCase(evalCase: EvalCase, deps: EvalDeps): Promise<CaseR
       case: evalCase,
       verdict: "degenerate",
       latencyMs,
+      usage,
+      costUsd,
       checks,
       analysis,
       detail: `the fix no longer contains <${evalCase.subjectTag ?? "the offending element"}>`,
     };
   }
 
-  return { case: evalCase, verdict: "resolved", latencyMs, checks, analysis };
+  return { case: evalCase, verdict: "resolved", latencyMs, usage, costUsd, checks, analysis };
 }
 
 export async function runEval(deps: EvalDeps): Promise<CaseResult[]> {
@@ -125,6 +145,10 @@ export interface Scoreboard {
   resolvedRate: number;
   latencyP50: number;
   latencyP95: number;
+  /** Tokens the whole run spent, retries included. Null when nothing reported any. */
+  usage: TokenUsage | null;
+  /** Null when the model has no configured rate — never a zero standing in for it. */
+  costUsd: number | null;
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -150,6 +174,16 @@ export function summarise(results: CaseResult[]): Scoreboard {
     .map((r) => r.latencyMs)
     .sort((a, b) => a - b);
 
+  const usage = results.reduce<TokenUsage | null>(
+    (total, result) => addUsage(total, result.usage ?? null),
+    null,
+  );
+  // Summed rather than recomputed from a rate, so a run that mixes priced and
+  // unpriced calls cannot report the unpriced half as free.
+  const priced = results.filter((result) => typeof result.costUsd === "number");
+  const costUsd =
+    priced.length === 0 ? null : priced.reduce((total, r) => total + (r.costUsd ?? 0), 0);
+
   return {
     total: results.length,
     scored,
@@ -157,6 +191,8 @@ export function summarise(results: CaseResult[]): Scoreboard {
     resolvedRate: scored === 0 ? 0 : counts.resolved / scored,
     latencyP50: percentile(latencies, 50),
     latencyP95: percentile(latencies, 95),
+    usage,
+    costUsd,
   };
 }
 
@@ -195,7 +231,24 @@ export function formatReport(results: CaseResult[], scoreboard: Scoreboard): str
     );
   }
   lines.push(`  latency       p50 ${scoreboard.latencyP50}ms   p95 ${scoreboard.latencyP95}ms`);
+  lines.push(`  tokens        ${formatTokens(scoreboard.usage)}`);
+  lines.push(`  cost          ${formatCost(scoreboard.costUsd)}`);
   return lines.join("\n");
+}
+
+export function formatTokens(usage: TokenUsage | null): string {
+  if (usage === null) return "not reported by this provider";
+  return `${usage.totalTokens} (in ${usage.inputTokens}, out ${usage.outputTokens})`;
+}
+
+/**
+ * "no rate configured" rather than "$0.00". A run whose price is unknown must
+ * not read as a run that was free — that is the whole reason cost is nullable.
+ */
+export function formatCost(costUsd: number | null): string {
+  return costUsd === null
+    ? "no rate configured (set LLM_PRICE_*_PER_MTOK)"
+    : `$${costUsd.toFixed(4)}`;
 }
 
 // ── Comparing two prompts ────────────────────────────────────────────────────
@@ -220,6 +273,11 @@ export interface ArmStats {
   latencyP50: number;
   /** Case id → how many repeats resolved it. */
   resolvedByCase: Map<string, number>;
+  /** Tokens the whole arm spent, across every repeat. */
+  usage: TokenUsage | null;
+  costUsd: number | null;
+  /** Mean input tokens per scored call — the size of the prompt, in practice. */
+  inputTokensPerCall: number | null;
 }
 
 export function summariseArm(label: string, runs: CaseResult[][]): ArmStats {
@@ -258,6 +316,18 @@ export function summariseArm(label: string, runs: CaseResult[][]): ArmStats {
     .map((r) => r.latencyMs)
     .sort((a, b) => a - b);
 
+  const usage = boards.reduce<TokenUsage | null>(
+    (total, board) => addUsage(total, board.usage),
+    null,
+  );
+  const pricedBoards = boards.filter((board) => typeof board.costUsd === "number");
+  const costUsd =
+    pricedBoards.length === 0
+      ? null
+      : pricedBoards.reduce((total, board) => total + (board.costUsd ?? 0), 0);
+
+  const calls = runs.flat().filter((result) => result.usage != null).length;
+
   return {
     label,
     repeats: runs.length,
@@ -266,6 +336,9 @@ export function summariseArm(label: string, runs: CaseResult[][]): ArmStats {
     counts,
     latencyP50: percentile(latencies, 50),
     resolvedByCase,
+    usage,
+    costUsd,
+    inputTokensPerCall: usage === null || calls === 0 ? null : usage.inputTokens / calls,
   };
 }
 
@@ -278,6 +351,11 @@ export interface Comparison {
   gained: string[];
   /** Cases the candidate resolved less often — the regressions a headline rate hides. */
   lost: string[];
+  /**
+   * Extra input tokens the candidate's prompt costs per call, as a fraction.
+   * Null when either arm's provider reported no usage.
+   */
+  inputTokenOverhead: number | null;
 }
 
 export function compareArms(baseline: ArmStats, candidate: ArmStats): Comparison {
@@ -291,26 +369,44 @@ export function compareArms(baseline: ArmStats, candidate: ArmStats): Comparison
     else if (candidateWins < baselineWins) lost.push(id);
   }
 
+  const base = baseline.inputTokensPerCall;
+  const cand = candidate.inputTokensPerCall;
+
   return {
     baseline,
     candidate,
     delta: candidate.resolvedRate - baseline.resolvedRate,
     gained: gained.sort(),
     lost: lost.sort(),
+    // What the candidate prompt costs, so the delta can be read as a trade
+    // rather than as a free win. A prompt change always has a price.
+    inputTokenOverhead: base === null || cand === null || base === 0 ? null : cand / base - 1,
   };
 }
 
 export function formatComparison(comparison: Comparison): string {
   const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
+  // The variable-width field goes last so the columns before it line up.
   const arm = (stats: ArmStats) =>
     `  ${stats.label.padEnd(12)} ${pct(stats.resolvedRate).padStart(6)}` +
-    `   runs: ${stats.perRunRate.map(pct).join(", ")}` +
-    `   p50 ${stats.latencyP50}ms`;
+    `   p50 ${`${stats.latencyP50}ms`.padEnd(7)}` +
+    `   in/call ${(stats.inputTokensPerCall === null
+      ? "n/a"
+      : String(Math.round(stats.inputTokensPerCall))
+    ).padStart(5)}` +
+    `   ${formatCost(stats.costUsd).padEnd(10)}` +
+    `   runs: ${stats.perRunRate.map(pct).join(", ")}`;
 
   const lines = [arm(comparison.baseline), arm(comparison.candidate), ""];
 
   const sign = comparison.delta >= 0 ? "+" : "";
   lines.push(`  delta        ${sign}${(comparison.delta * 100).toFixed(1)} points`);
+  if (comparison.inputTokenOverhead !== null) {
+    // Printed next to the delta on purpose: the question is never "did it help?"
+    // but "did it help enough to be worth what it costs?".
+    const overhead = comparison.inputTokenOverhead * 100;
+    lines.push(`  input tokens ${overhead >= 0 ? "+" : ""}${overhead.toFixed(1)}% per call`);
+  }
 
   if (comparison.gained.length > 0) lines.push(`  gained       ${comparison.gained.join(", ")}`);
   // Regressions are printed even when the headline moved the right way. A prompt

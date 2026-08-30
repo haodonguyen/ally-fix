@@ -144,6 +144,22 @@ the prompt**, so a prompt change cannot be masked by 30 days of pre-change answe
 and the "don't delete the element" instruction sits in the **base** prompt, in both
 arms, so grounding cannot take credit for it.
 
+**And what any of it costs is now a number.** Every call reports its tokens —
+**including the attempts that failed**, because a group that only parsed on the
+third try was billed three times, and a cost metric blind to retries is least
+accurate exactly when the bill is climbing. Cache hits are counted next to
+tokens, so the summary says what the cache saved rather than merely that it was
+used. `eval:compare` prints input tokens per call beside the resolved-rate delta,
+because the question about a prompt change is never "did it help?" but "did it
+help enough to be worth what it costs?"
+
+Dollars are configuration, not code. Prices change and differ per account, so a
+table checked into a repo goes stale and then reports confident wrong numbers —
+worse than none, because a wrong cost gets acted on. Supply a rate and costs are
+priced; supply nothing and the logs carry exact token counts and a **null** cost.
+`null` is never rendered as `$0.00` anywhere, and a provider that reports no usage
+is `null` rather than a free-looking zero. ([ADR-0008](./docs/adr/0008-tokens-are-measured-cost-is-configured.md))
+
 Three of the first twenty golden cases turned out not to violate the rules they
 claimed to — axe accepts a `placeholder` as an accessible name, among other
 surprises. The dataset re-checks itself on every run, and a rotted case is reported
@@ -196,8 +212,8 @@ readiness, checks both dependencies, and names which one is down.
 
 ## How this is tested
 
-**321 tests**, gated in CI at 90% statements / 88% branches / 88% functions / 90%
-lines against measured 96.6 / 92.9 / 94.6 / 98.1. The thresholds are a **ratchet**
+**368 tests**, gated in CI at 90% statements / 88% branches / 88% functions / 90%
+lines against measured 96.9 / 93.6 / 95.0 / 98.2. The thresholds are a **ratchet**
 set at what the suite reaches, so a drop fails the build.
 
 The tests aim at the paths that are hard to reach and easy to get wrong: the HTTP
@@ -220,7 +236,7 @@ is protected and requires both to pass.
 
 ## Why it's built this way
 
-Seven [Architecture Decision Records](./docs/adr/) record the decisions above — each
+Eight [Architecture Decision Records](./docs/adr/) record the decisions above — each
 with the alternatives that were rejected and **what the choice cost**, including
 the costs already paid. Requiring schema-validated output, for example, ruled out a
 Groq model that rejects the AI SDK's `json_schema` format.

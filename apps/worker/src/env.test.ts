@@ -6,7 +6,7 @@ vi.hoisted(() => {
   process.env.REDIS_URL = "redis://test";
 });
 
-import { resolveLlmClientOptions, resolveLlmConfig } from "./env";
+import { resolveLlmClientOptions, resolveLlmConfig, resolveLlmPrices } from "./env";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -154,5 +154,56 @@ describe("resolveLlmClientOptions", () => {
 
     vi.stubEnv("LLM_MAX_RETRIES", "-1");
     expect(resolveLlmClientOptions(ollama).maxRetries).toBe(3);
+  });
+});
+
+describe("resolveLlmPrices", () => {
+  const ollama = { provider: "ollama", model: "llama3.1" } as const;
+  const groq = { provider: "groq", model: "openai/gpt-oss-20b" } as const;
+
+  it("returns null when nothing is configured", () => {
+    expect(resolveLlmPrices()).toBeNull();
+  });
+
+  it("reads both rates when both are given", () => {
+    vi.stubEnv("LLM_PRICE_INPUT_PER_MTOK", "0.1");
+    vi.stubEnv("LLM_PRICE_OUTPUT_PER_MTOK", "0.5");
+    expect(resolveLlmPrices()).toEqual({ inputPerMTok: 0.1, outputPerMTok: 0.5 });
+  });
+
+  it("refuses a half-configured rate", () => {
+    // One rate alone would cost the other side of every call at zero, which
+    // understates the bill instead of admitting it is unknown.
+    vi.stubEnv("LLM_PRICE_INPUT_PER_MTOK", "0.1");
+    expect(resolveLlmPrices()).toBeNull();
+  });
+
+  it("accepts an explicit zero, which is a real rate", () => {
+    vi.stubEnv("LLM_PRICE_INPUT_PER_MTOK", "0");
+    vi.stubEnv("LLM_PRICE_OUTPUT_PER_MTOK", "0");
+    expect(resolveLlmPrices()).toEqual({ inputPerMTok: 0, outputPerMTok: 0 });
+  });
+
+  it("treats an unparseable or negative rate as unconfigured", () => {
+    for (const bad of ["$0.10", "abc", "-1", ""]) {
+      vi.stubEnv("LLM_PRICE_INPUT_PER_MTOK", bad);
+      vi.stubEnv("LLM_PRICE_OUTPUT_PER_MTOK", "0.5");
+      expect(resolveLlmPrices()).toBeNull();
+    }
+  });
+
+  it("hands the rate to the client options", () => {
+    vi.stubEnv("LLM_PRICE_INPUT_PER_MTOK", "0.1");
+    vi.stubEnv("LLM_PRICE_OUTPUT_PER_MTOK", "0.5");
+    expect(resolveLlmClientOptions(groq).prices).toEqual({
+      inputPerMTok: 0.1,
+      outputPerMTok: 0.5,
+    });
+  });
+
+  it("leaves prices undefined so the LLM layer can apply its own default", () => {
+    // Ollama's zero belongs in the LLM layer, where "local" is known. Forcing a
+    // null here would override it.
+    expect(resolveLlmClientOptions(ollama).prices).toBeUndefined();
   });
 });

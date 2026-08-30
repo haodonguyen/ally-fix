@@ -1,4 +1,4 @@
-import { llmIssueAnalysisSchema, type LlmIssueAnalysis } from "@ally-fix/shared";
+import { llmIssueAnalysisSchema } from "@ally-fix/shared";
 import { generateObject } from "ai";
 import { createCircuitBreaker, type CircuitBreaker } from "./circuit-breaker";
 import {
@@ -11,12 +11,32 @@ import {
 import { analysisSystemPrompt, buildAnalysisPrompt, promptFingerprint } from "./prompt";
 import { resolveModel } from "./providers";
 import { createTokenBucket, noopThrottle, type Throttle } from "./throttle";
-import type { IssueGroupInput, LlmClient, LlmConfig } from "./types";
+import type { IssueGroupInput, LlmAnalysisResult, LlmClient, LlmConfig } from "./types";
+import {
+  addUsage,
+  defaultPricesFor,
+  estimateCostUsd,
+  readUsage,
+  type TokenPrices,
+  type TokenUsage,
+} from "./usage";
+
+/** What one provider call produced: the raw object, and what it consumed. */
+export interface SingleShotResult {
+  output: unknown;
+  /** Null when the provider reported no token counts — not zero. */
+  usage: TokenUsage | null;
+}
 
 /**
  * The single-shot generation primitive: given a system + user prompt, return the
- * model's raw object. The real implementation calls the AI SDK; tests inject a
- * fake so the retry/validation logic can be exercised without a provider.
+ * model's raw object and its token usage. The real implementation calls the AI
+ * SDK; tests inject a fake so the retry/validation logic can be exercised
+ * without a provider.
+ *
+ * Usage rides back with the output rather than through a callback because it is
+ * per-attempt: the retry loop has to add up what the failed attempts spent, and
+ * a side channel makes that easy to forget.
  *
  * The `signal` is the caller's deadline — implementations must forward it so an
  * abort actually cancels the in-flight request instead of leaking it.
@@ -25,7 +45,7 @@ export type SingleShotGenerate = (args: {
   system: string;
   prompt: string;
   signal: AbortSignal;
-}) => Promise<unknown>;
+}) => Promise<SingleShotResult>;
 
 export interface CreateLlmClientOptions {
   /** Extra attempts after the first, on a validation or provider failure. Default 3. */
@@ -34,6 +54,12 @@ export interface CreateLlmClientOptions {
   retryDelayMs?: number;
   /** Upper bound on a single backoff wait, before jitter. Default 20s. */
   maxRetryDelayMs?: number;
+  /**
+   * Per-million-token rates for costing calls. Defaults to the provider's known
+   * rate, which exists only for Ollama (local, genuinely zero). Hosted providers
+   * report a null cost until the operator supplies one.
+   */
+  prices?: TokenPrices;
   /** Deadline for one attempt, in ms. Default 60s. 0 or less disables it. */
   timeoutMs?: number;
   /** Sustained outbound request rate. 0 or less disables throttling. Default 0. */
@@ -173,6 +199,7 @@ export function createLlmClient(
   const random = options.random ?? Math.random;
   const grounded = options.grounded ?? true;
   const system = analysisSystemPrompt(grounded);
+  const prices = options.prices ?? config.prices ?? defaultPricesFor(config.provider);
 
   const throttle =
     options.throttle ??
@@ -191,7 +218,7 @@ export function createLlmClient(
   const generate: SingleShotGenerate =
     options.generate ??
     (async ({ system, prompt, signal }) => {
-      const { object } = await generateObject({
+      const { object, usage } = await generateObject({
         model: resolveModel(config),
         schema: llmIssueAnalysisSchema,
         system,
@@ -200,14 +227,21 @@ export function createLlmClient(
         // We own the retry loop below, so don't let the SDK stack its own on top.
         maxRetries: 0,
       });
-      return object;
+      return { output: object, usage: readUsage(usage) };
     });
 
-  /** One attempt: wait for rate-limit budget, call the provider, validate the shape. */
-  async function attempt(prompt: string): Promise<LlmIssueAnalysis> {
+  /**
+   * One attempt: wait for rate-limit budget, call the provider, validate the shape.
+   *
+   * `spend` is called with whatever the provider reported *before* validation can
+   * reject the answer. A response that fails the schema was still generated and
+   * still billed, so its tokens have to be counted even though its content is
+   * thrown away.
+   */
+  async function attempt(prompt: string, spend: (usage: TokenUsage | null) => void) {
     await throttle.acquire();
 
-    const raw = await withTimeout(timeoutMs, (signal) =>
+    const result = await withTimeout(timeoutMs, (signal) =>
       generate({ system, prompt, signal }),
     ).catch((error: unknown) => {
       // Anything thrown by the provider becomes a typed provider error, so the
@@ -216,7 +250,9 @@ export function createLlmClient(
       throw classifyProviderError(error);
     });
 
-    const parsed = llmIssueAnalysisSchema.safeParse(coerceRawOutput(raw));
+    spend(result.usage);
+
+    const parsed = llmIssueAnalysisSchema.safeParse(coerceRawOutput(result.output));
     if (!parsed.success) throw new LlmValidationError(parsed.error.message, parsed.error);
     return parsed.data;
   }
@@ -224,17 +260,24 @@ export function createLlmClient(
   return {
     promptFingerprint: promptFingerprint(grounded),
 
-    async analyzeIssueGroup(input: IssueGroupInput): Promise<LlmIssueAnalysis> {
+    async analyzeIssueGroup(input: IssueGroupInput): Promise<LlmAnalysisResult> {
       const prompt = buildAnalysisPrompt(input, { grounded });
       let lastError: unknown;
       let attempts = 0;
+      // Accumulated across attempts, so a group that only parsed on the third try
+      // reports all three calls. Charging for one would make retries look free.
+      let usage: TokenUsage | null = null;
+      const spend = (attemptUsage: TokenUsage | null) => {
+        usage = addUsage(usage, attemptUsage);
+      };
 
       for (let tries = 0; tries <= maxRetries; tries++) {
         attempts++;
         try {
           // The breaker wraps each attempt rather than the whole loop, so a
           // provider that dies mid-retry short-circuits the remaining attempts.
-          return await breaker.execute(() => attempt(prompt));
+          const analysis = await breaker.execute(() => attempt(prompt, spend));
+          return { analysis, usage, costUsd: estimateCostUsd(usage, prices), attempts };
         } catch (error) {
           lastError = error;
           // Don't waste attempts (and quota) on errors that can't succeed on
@@ -248,7 +291,7 @@ export function createLlmClient(
         }
       }
 
-      throw new LlmAnalysisError(attempts, lastError);
+      throw new LlmAnalysisError(attempts, lastError, usage);
     },
   };
 }

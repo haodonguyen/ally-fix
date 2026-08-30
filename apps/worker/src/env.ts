@@ -1,4 +1,9 @@
-import type { CreateLlmClientOptions, LlmConfig, LlmProviderName } from "@ally-fix/llm";
+import type {
+  CreateLlmClientOptions,
+  LlmConfig,
+  LlmProviderName,
+  TokenPrices,
+} from "@ally-fix/llm";
 
 /** Reads a required env var, throwing if it is missing or empty. */
 function required(name: string): string {
@@ -112,6 +117,39 @@ export function resolveLlmConfig(): LlmConfig {
 }
 
 /**
+ * Reads a non-negative decimal env var, for prices. Returns null when unset or
+ * unparseable — `null` means "no rate configured", which is a different thing
+ * from a rate of zero and must stay different all the way to the log line.
+ */
+function priceEnv(name: string): number | null {
+  const raw = rawEnv(name);
+  if (raw === undefined) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+/**
+ * Per-million-token rates for the configured model, from the environment.
+ *
+ * Prices are configuration, not code: they change, they differ per account
+ * (free tier, committed use, credits), and a table checked into a repo goes
+ * stale faster than anyone updates it. A missing or half-filled rate yields
+ * null, so the logs report exact token counts and no cost at all — rather than
+ * a confident wrong number (ADR-0008).
+ *
+ * Ollama is the exception, and it is handled in the LLM layer: a local model
+ * bills nothing per token, so zero there is a fact rather than a default.
+ */
+export function resolveLlmPrices(): TokenPrices | null {
+  const inputPerMTok = priceEnv("LLM_PRICE_INPUT_PER_MTOK");
+  const outputPerMTok = priceEnv("LLM_PRICE_OUTPUT_PER_MTOK");
+  // Both halves or neither. One rate alone would silently cost the other side
+  // of the call at zero, which understates every bill it touches.
+  if (inputPerMTok === null || outputPerMTok === null) return null;
+  return { inputPerMTok, outputPerMTok };
+}
+
+/**
  * The outbound failure policy for LLM calls: per-attempt deadline, rate limit,
  * retry budget, and circuit breaker.
  *
@@ -137,5 +175,6 @@ export function resolveLlmClientOptions(config: LlmConfig): CreateLlmClientOptio
     // set with grounding off and attribute the difference; it is a measurement
     // control, not a setting anyone tuning a deployment should need to touch.
     grounded: booleanEnv("LLM_GROUNDING", true),
+    prices: resolveLlmPrices() ?? undefined,
   };
 }
