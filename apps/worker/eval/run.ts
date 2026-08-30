@@ -278,6 +278,11 @@ export interface ArmStats {
   costUsd: number | null;
   /** Mean input tokens per scored call — the size of the prompt, in practice. */
   inputTokensPerCall: number | null;
+  /**
+   * Dollars per case resolved — the number an operator actually decides on.
+   * Null when the arm has no rate, or resolved nothing to divide by.
+   */
+  costPerResolved: number | null;
 }
 
 export function summariseArm(label: string, runs: CaseResult[][]): ArmStats {
@@ -339,6 +344,7 @@ export function summariseArm(label: string, runs: CaseResult[][]): ArmStats {
     usage,
     costUsd,
     inputTokensPerCall: usage === null || calls === 0 ? null : usage.inputTokens / calls,
+    costPerResolved: costUsd === null || resolved === 0 ? null : costUsd / resolved,
   };
 }
 
@@ -424,5 +430,110 @@ export function formatComparison(comparison: Comparison): string {
         " number, so treat a small delta as unmeasured rather than as no effect.",
     );
   }
+  return lines.join("\n");
+}
+
+// ── Comparing many models ────────────────────────────────────────────────────
+
+/**
+ * Cases that not one arm resolved, in the order the dataset lists them.
+ *
+ * Worth printing separately, because the likeliest explanation is not that every
+ * model is bad at that rule. It is that the case is. `eval:validate` catches a
+ * snippet that stopped violating its rule; it cannot catch one whose only
+ * correct fix the oracle refuses to accept. A rule nobody passes deserves a look
+ * before it becomes a story about model limitations.
+ */
+export function resolvedByNobody(arms: ArmStats[]): string[] {
+  if (arms.length === 0) return [];
+  const [first, ...rest] = arms;
+  const ids = [...first!.resolvedByCase.keys()];
+  return ids.filter((id) =>
+    [first!, ...rest].every((arm) => {
+      const wins = arm.resolvedByCase.get(id);
+      // A case an arm never ran says nothing about it; only a real zero counts.
+      return wins === undefined || wins === 0;
+    }),
+  );
+}
+
+/** Arms ranked by resolved rate, best first. Ties keep their original order. */
+export function rankArms(arms: ArmStats[]): ArmStats[] {
+  return [...arms].sort((a, b) => b.resolvedRate - a.resolvedRate);
+}
+
+export function formatArmTable(arms: ArmStats[]): string {
+  if (arms.length === 0) return "  no arms to compare";
+
+  const ranked = rankArms(arms);
+  const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
+  const width = Math.max(...ranked.map((arm) => arm.label.length), 5);
+
+  const money = (value: number | null, digits: number) =>
+    value === null ? "n/a" : `$${value.toFixed(digits)}`;
+
+  // One row builder for the header, the rule, and the data, so the columns
+  // cannot drift apart as they did when each was written by hand.
+  const row = (label: string, cells: [string, string, string, string, string]) =>
+    `  ${label.padEnd(width)}  ${cells[0].padStart(8)}  ${cells[1].padStart(7)}` +
+    `  ${cells[2].padStart(8)}  ${cells[3].padStart(9)}  ${cells[4].padStart(9)}`;
+
+  const lines = [
+    row("model", ["resolved", "p50", "in/call", "run", "per fix"]),
+    row("-".repeat(width), ["--------", "-------", "--------", "---------", "---------"]),
+  ];
+
+  for (const arm of ranked) {
+    lines.push(
+      row(arm.label, [
+        pct(arm.resolvedRate),
+        `${arm.latencyP50}ms`,
+        arm.inputTokensPerCall === null ? "n/a" : String(Math.round(arm.inputTokensPerCall)),
+        money(arm.costUsd, 4),
+        money(arm.costPerResolved, 5),
+      ]),
+    );
+  }
+
+  lines.push("");
+  for (const arm of ranked) {
+    lines.push(`  ${arm.label.padEnd(width)}  runs: ${arm.perRunRate.map(pct).join(", ")}`);
+  }
+
+  const unpriced = ranked.filter((arm) => arm.costUsd === null).map((arm) => arm.label);
+  if (unpriced.length > 0) {
+    lines.push("");
+    lines.push(
+      `  No rate configured for: ${unpriced.join(", ")}. Cost shows n/a rather than` +
+        " $0 — an unpriced model must not win on price by default.",
+    );
+  }
+
+  const stuck = resolvedByNobody(ranked);
+  if (stuck.length > 0) {
+    lines.push("");
+    lines.push(`  No arm resolved: ${stuck.join(", ")}`);
+    lines.push(
+      "    A case every model fails is as likely to be a bad case as a hard rule." +
+        " Read it before calling it a model limitation.",
+    );
+  }
+
+  const repeats = Math.min(...ranked.map((arm) => arm.repeats));
+  if (repeats < 3) {
+    lines.push("");
+    lines.push(
+      `  Read with care: ${repeats} repeat(s) per arm. The per-run rates above are` +
+        " the error bar — a gap smaller than the spread within an arm is not a result.",
+    );
+  }
+  // Local and hosted models differ by an order of magnitude in latency and by
+  // definition in billing, so the top row is the best *score*, not the best
+  // choice. Saying so beats letting a sorted table imply otherwise.
+  lines.push("");
+  lines.push(
+    "  Ranked by resolved rate alone. A local model bills nothing per token but" +
+      " costs latency; pick against your own constraint, not the first row.",
+  );
   return lines.join("\n");
 }

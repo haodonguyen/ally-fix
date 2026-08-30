@@ -11,6 +11,7 @@
     "check:a11y": "tsx scripts/a11y-check.ts",
     "eval": "node --env-file=../../.env --import tsx eval/index.ts",
     "eval:compare": "node --env-file=../../.env --import tsx eval/compare.ts",
+    "eval:models": "node --env-file=../../.env --import tsx eval/compare-models.ts",
     "eval:validate": "tsx eval/validate.ts",
     "typecheck": "tsc --noEmit",
     "test": "echo \"no tests yet\" && exit 0"
@@ -22,7 +23,8 @@
     "@axe-core/playwright": "^4.12.1",
     "bullmq": "^5.79.2",
     "ioredis": "^5.11.1",
-    "playwright": "^1.61.1"
+    "playwright": "^1.61.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.1.0",

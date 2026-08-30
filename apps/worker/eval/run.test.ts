@@ -3,12 +3,15 @@ import type { LlmIssueAnalysis } from "@ally-fix/shared";
 import type { EvalCase } from "./cases";
 import {
   compareArms,
+  formatArmTable,
   formatComparison,
   formatCost,
   formatReport,
   formatTokens,
   runCase,
   runEval,
+  rankArms,
+  resolvedByNobody,
   summarise,
   summariseArm,
   type CaseResult,
@@ -423,5 +426,87 @@ describe("comparing what a prompt costs", () => {
     const report = formatComparison(compareArms(cheap, rich));
     expect(report).toContain("delta");
     expect(report).toContain("input tokens");
+  });
+});
+
+describe("comparing many models", () => {
+  const arm = (label: string, verdicts: CaseVerdict[], tokens = 400, cost: number | null = null) =>
+    summariseArm(label, [
+      verdicts.map((verdict, i) => {
+        const base = result(`case-${i}`, verdict, 100, { inputTokens: tokens, outputTokens: 100 });
+        return cost === null ? base : { ...base, costUsd: cost };
+      }),
+    ]);
+
+  it("ranks by resolved rate, best first", () => {
+    const weak = arm("weak", ["not-resolved", "not-resolved", "resolved"]);
+    const strong = arm("strong", ["resolved", "resolved", "resolved"]);
+
+    expect(rankArms([weak, strong]).map((a) => a.label)).toEqual(["strong", "weak"]);
+  });
+
+  it("divides cost by fixes to give a price per fix", () => {
+    // The number an operator decides on: not what the run cost, but what a
+    // working answer cost.
+    const priced = arm("priced", ["resolved", "resolved", "not-resolved"], 400, 0.001);
+    expect(priced.costUsd).toBeCloseTo(0.003);
+    expect(priced.costPerResolved).toBeCloseTo(0.0015);
+  });
+
+  it("has no price per fix when nothing was resolved", () => {
+    expect(arm("useless", ["not-resolved"], 400, 0.001).costPerResolved).toBeNull();
+  });
+
+  it("has no price per fix when the model has no rate", () => {
+    expect(arm("unpriced", ["resolved"]).costPerResolved).toBeNull();
+  });
+
+  it("names the cases no arm resolved", () => {
+    const a = arm("a", ["resolved", "not-resolved"]);
+    const b = arm("b", ["not-resolved", "not-resolved"]);
+
+    // case-0 was solved by one arm; case-1 by nobody.
+    expect(resolvedByNobody([a, b])).toEqual(["case-1"]);
+  });
+
+  it("does not count a case an arm never ran as one it failed", () => {
+    const a = summariseArm("a", [[result("x", "resolved")]]);
+    const b = summariseArm("b", [[result("y", "not-resolved")]]);
+    // "x" is absent from b, which is silence, not a failure.
+    expect(resolvedByNobody([a, b])).toEqual([]);
+  });
+
+  it("shows an unpriced model as n/a, never as the cheapest", () => {
+    const table = formatArmTable([
+      arm("priced", ["resolved"], 400, 0.002),
+      arm("unpriced", ["resolved"]),
+    ]);
+
+    expect(table).toContain("n/a");
+    expect(table).toContain("No rate configured for: unpriced");
+    expect(table).not.toContain("$0.0000");
+  });
+
+  it("warns about the cases every model failed", () => {
+    const table = formatArmTable([arm("a", ["not-resolved"]), arm("b", ["not-resolved"])]);
+    expect(table).toContain("No arm resolved: case-0");
+    expect(table).toContain("as likely to be a bad case");
+  });
+
+  it("says a single repeat is not a measurement", () => {
+    const table = formatArmTable([arm("a", ["resolved"]), arm("b", ["resolved"])]);
+    expect(table).toContain("Read with care: 1 repeat");
+  });
+
+  it("refuses to let the top row read as the right answer", () => {
+    // Local and hosted differ by an order of magnitude in latency and by
+    // definition in billing. A sorted table implies a winner; this says otherwise.
+    const table = formatArmTable([arm("a", ["resolved"]), arm("b", ["not-resolved"])]);
+    expect(table).toContain("pick against your own constraint");
+  });
+
+  it("handles being given nothing to compare", () => {
+    expect(formatArmTable([])).toContain("no arms");
+    expect(resolvedByNobody([])).toEqual([]);
   });
 });
