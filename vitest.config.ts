@@ -23,6 +23,9 @@ export default defineConfig({
       include: [
         "packages/*/src/**/*.ts",
         "apps/worker/src/**/*.ts",
+        // Opted in once the eval grew real logic: scoring, arm statistics, and
+        // config validation are as load-bearing as anything in src/.
+        "apps/worker/eval/**/*.ts",
         "apps/web/lib/**/*.ts",
         "apps/web/app/api/**/*.ts",
       ],
@@ -42,6 +45,15 @@ export default defineConfig({
         // Needs a real Chromium to exercise. Its security-critical half is
         // `assertUrlIsSafe`, which is covered in packages/shared.
         "apps/worker/src/scanner.ts",
+        // The golden set is data, not logic; `eval:validate` is what checks it.
+        "apps/worker/eval/cases.ts",
+        // Script wiring: these import env and open a browser at module load.
+        "apps/worker/eval/index.ts",
+        "apps/worker/eval/compare.ts",
+        "apps/worker/eval/compare-models.ts",
+        "apps/worker/eval/validate.ts",
+        // Drives a real Chromium; the harness that uses it is tested with fakes.
+        "apps/worker/eval/verify.ts",
       ],
 
       // Ratchet, not aspiration: set at the level the suite actually reaches, so

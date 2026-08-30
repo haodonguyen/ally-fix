@@ -1,0 +1,22 @@
+{
+  "repeats": 3,
+  "models": [
+    {
+      "label": "ollama/llama3.1",
+      "provider": "ollama",
+      "model": "llama3.1",
+      "baseUrl": "http://localhost:11434"
+    },
+    {
+      "label": "groq/gpt-oss-20b",
+      "provider": "groq",
+      "model": "openai/gpt-oss-20b",
+      "apiKeyEnv": "GROQ_API_KEY"
+    },
+    {
+      "label": "gemini/2.0-flash",
+      "provider": "gemini",
+      "model": "gemini-2.0-flash"
+    }
+  ]
+}

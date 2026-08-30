@@ -7,6 +7,10 @@ node_modules/
 .env.*
 !.env.example
 
+# Model comparison config: names env vars, but it is per-machine and records
+# real prices. The example is tracked; the working copy is not.
+apps/worker/eval/models.json
+
 # Build output
 dist/
 build/

@@ -132,6 +132,14 @@ headline metric, `resolved`, is the share of 22 golden cases where it stops firi
 trivial degenerate solution: delete the `<img>`. It passes and helps nobody, so a
 fix only counts if it still contains the element the rule was about.
 
+**Model choice is a table, not a habit.** `eval:models` scores several providers
+against the same golden set and ranks them by resolved rate, with latency, prompt
+size, run cost, and **dollars per fix** beside it — the last being the column that
+actually decides anything. An unpriced model shows `n/a` rather than `$0`, so it
+cannot win on price by virtue of nobody having said what it costs, and the report
+names the cases _no_ model resolved, because those are as likely to be bad cases
+as hard rules.
+
 **Prompt changes are A/B'd, not asserted.** `eval:compare` runs the same set with
 grounding on and off, holding everything else constant, and prints each repeat's
 rate rather than one pooled number — the model is not deterministic, and a small
@@ -212,8 +220,9 @@ readiness, checks both dependencies, and names which one is down.
 
 ## How this is tested
 
-**368 tests**, gated in CI at 90% statements / 88% branches / 88% functions / 90%
-lines against measured 96.9 / 93.6 / 95.0 / 98.2. The thresholds are a **ratchet**
+**402 tests**, gated in CI at 90% statements / 88% branches / 88% functions / 90%
+lines against measured 97.2 / 91.6 / 96.3 / 98.5 — now including the eval harness,
+which was opted into the measurement once it grew real logic. The thresholds are a **ratchet**
 set at what the suite reaches, so a drop fails the build.
 
 The tests aim at the paths that are hard to reach and easy to get wrong: the HTTP
@@ -265,6 +274,7 @@ ally-fix/
     worker/      Playwright + axe-core scanner (separate service)
                  scan → store → analyse, plus shutdown and stale-audit recovery
       eval/      Golden set + axe oracle: does the model's own fix work?
+                 plus the prompt A/B and the model comparison
   packages/
     db/          Drizzle schema, queries, Postgres client
     llm/         Provider-agnostic LLM layer: errors, throttle, circuit breaker
@@ -328,6 +338,7 @@ pnpm db:generate    # regenerate Drizzle migrations after a schema change
 # Output quality — manual, needs a real provider (and Chromium for the first two)
 pnpm --filter @ally-fix/worker eval           # score the model against the golden set
 pnpm --filter @ally-fix/worker eval:compare   # score it with and without WCAG grounding
+pnpm --filter @ally-fix/worker eval:models    # score several models side by side
 pnpm --filter @ally-fix/worker eval:validate  # check the golden set is still valid
 pnpm --filter @ally-fix/llm grounding:generate  # refresh the axe rule facts after an axe upgrade
 ```
