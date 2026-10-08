@@ -1,5 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LlmAnalysisResult, LlmClient, LlmConfig } from "@ally-fix/llm";
+import { SpanKind, injectTraceContext, traceLogFields, withSpan } from "@ally-fix/telemetry";
+import { captureMetrics, captureSpans } from "@ally-fix/telemetry/testing";
+import { SpanStatusCode } from "@opentelemetry/api";
 import type IORedis from "ioredis";
 
 const { markAuditRunning, insertIssues, completeAudit, failAudit, setAnalysisForRule } = vi.hoisted(
@@ -22,6 +25,7 @@ vi.mock("@ally-fix/db", () => ({
 
 import { createAuditProcessor, type ProcessAuditDeps } from "./process-audit";
 import type { ScannedIssue } from "./scanner";
+import { createAuditMetrics } from "./telemetry";
 import { createFakeLogger, type CapturedLogger } from "./testing/fake-logger";
 
 const AUDIT_ID = "3f1a9c22-7b4e-4d51-9a2c-8e6f0b1d4a77";
@@ -91,7 +95,11 @@ function build(overrides: Partial<ProcessAuditDeps> = {}) {
   };
 }
 
+const spans = captureSpans();
+afterAll(() => spans.stop());
+
 beforeEach(() => {
+  spans.reset();
   clock = 0;
   vi.clearAllMocks();
   for (const fn of [markAuditRunning, insertIssues, completeAudit, failAudit, setAnalysisForRule]) {
@@ -358,5 +366,137 @@ describe("what the logs say", () => {
     const logged = captured.first("discarding malformed job");
     expect(logged).toMatchObject({ jobId: "j-9", level: "error" });
     expect(logged).not.toHaveProperty("auditId");
+  });
+});
+
+describe("what the trace says", () => {
+  const job = { id: "j-1", data: { auditId: AUDIT_ID, url: "https://example.com" } };
+
+  it("opens a consumer span for the job, with scan and analysis beneath it", async () => {
+    const { process } = build({
+      scan: vi.fn().mockResolvedValue([issue("image-alt", "critical")]),
+    });
+
+    await process(job);
+
+    const consumer = spans.span("process audit-scan");
+    expect(consumer.kind).toBe(SpanKind.CONSUMER);
+    expect(consumer.attributes).toMatchObject({
+      "messaging.system": "bullmq",
+      "messaging.destination.name": "audit-scan",
+      "messaging.operation": "process",
+      "messaging.message.id": "j-1",
+      "allyfix.audit.id": AUDIT_ID,
+      "allyfix.audit.issues": 1,
+      "url.full": "https://example.com",
+    });
+    expect(consumer.attributes["allyfix.audit.score"]).toEqual(expect.any(Number));
+    for (const child of ["audit.scan", "audit.analyze"]) {
+      expect(spans.span(child).parentSpanContext?.spanId).toBe(consumer.spanContext().spanId);
+    }
+    expect(spans.span("audit.scan").attributes["allyfix.scan.issues"]).toBe(1);
+    expect(spans.span("audit.analyze").attributes).toMatchObject({
+      "allyfix.llm.analyzed": 1,
+      "allyfix.llm.failed": 0,
+    });
+  });
+
+  it("joins the trace of the request that enqueued the job", async () => {
+    let carrier: Record<string, string> = {};
+    await withSpan("POST /api/audits", { kind: SpanKind.SERVER }, async () => {
+      carrier = injectTraceContext();
+    });
+    const { process } = build();
+
+    await process({ ...job, data: { ...job.data, trace: carrier } });
+
+    const web = spans.span("POST /api/audits");
+    const consumer = spans.span("process audit-scan");
+    expect(consumer.spanContext().traceId).toBe(web.spanContext().traceId);
+    expect(consumer.parentSpanContext?.spanId).toBe(web.spanContext().spanId);
+  });
+
+  it("starts a trace of its own for a job with no context", async () => {
+    const { process } = build();
+    await process(job);
+    expect(spans.span("process audit-scan").parentSpanContext).toBeUndefined();
+  });
+
+  it("marks the span failed with the original error when the audit fails", async () => {
+    const { process } = build({ scan: vi.fn().mockRejectedValue(new Error("net::ERR_TIMED_OUT")) });
+
+    await expect(process(job)).rejects.toThrow("net::ERR_TIMED_OUT");
+
+    const consumer = spans.span("process audit-scan");
+    expect(consumer.status).toEqual({ code: SpanStatusCode.ERROR, message: "net::ERR_TIMED_OUT" });
+    expect(spans.span("audit.scan").status.code).toBe(SpanStatusCode.ERROR);
+  });
+
+  it("stamps each log line with the trace it was written in", async () => {
+    // The production logger's hook (see logger.ts).
+    const captured = createFakeLogger({ context: traceLogFields });
+    const { process } = build({ logger: captured.logger });
+
+    await process(job);
+
+    const consumer = spans.span("process audit-scan");
+    expect(captured.first("scan started")).toMatchObject({
+      "trace.id": consumer.spanContext().traceId,
+      "span.id": consumer.spanContext().spanId,
+    });
+    // Written inside the scan span, so it points at that span instead.
+    expect(captured.first("scan finished")?.["span.id"]).toBe(
+      spans.span("audit.scan").spanContext().spanId,
+    );
+  });
+
+  it("records nothing for a malformed job, which has no audit to trace", async () => {
+    const { process } = build();
+    await process({ id: "j-9", data: { nonsense: true } });
+    expect(spans.spans()).toEqual([]);
+  });
+});
+
+describe("what the metrics say", () => {
+  it("records queue wait, scan, analysis outcomes and the audit's duration", async () => {
+    const { meter, points } = captureMetrics();
+    const { process } = build({
+      metrics: createAuditMetrics(meter),
+      scan: vi.fn().mockResolvedValue([issue("image-alt", "critical"), issue("label", "minor")]),
+    });
+    clock = 5_000;
+
+    await process({
+      id: "j-1",
+      timestamp: 2_000,
+      data: { auditId: AUDIT_ID, url: "https://example.com" },
+    });
+
+    // The first clock read is 5010; the job was enqueued at 2000.
+    expect((await points("allyfix.audit.queue_wait"))[0]?.value).toEqual({ count: 1, sum: 3.01 });
+    expect((await points("allyfix.scan.issues"))[0]?.value).toEqual({ count: 1, sum: 2 });
+    expect(await points("allyfix.llm.rule_groups")).toEqual([
+      { attributes: { "allyfix.llm.outcome": "generated" }, value: 2 },
+    ]);
+    expect(await points("allyfix.audit.duration")).toEqual([
+      { attributes: { "allyfix.audit.outcome": "completed" }, value: expect.anything() },
+    ]);
+  });
+
+  it("records a failed audit's duration under its own outcome", async () => {
+    const { meter, points } = captureMetrics();
+    const { process } = build({
+      metrics: createAuditMetrics(meter),
+      scan: vi.fn().mockRejectedValue(new Error("boom")),
+    });
+
+    await expect(
+      process({ id: "j-1", data: { auditId: AUDIT_ID, url: "https://example.com" } }),
+    ).rejects.toThrow();
+
+    const durations = await points("allyfix.audit.duration");
+    expect(durations.map((p) => p.attributes["allyfix.audit.outcome"])).toEqual(["failed"]);
+    // No timestamp on the job, so no wait is invented for it.
+    expect(await points("allyfix.audit.queue_wait")).toEqual([]);
   });
 });

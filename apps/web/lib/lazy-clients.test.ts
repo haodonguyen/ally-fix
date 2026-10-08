@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SpanKind, withSpan } from "@ally-fix/telemetry";
+import { captureSpans, type SpanCapture } from "@ally-fix/telemetry/testing";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Two constraints pull against each other here. The return types are widened to
 // `unknown` because each test swaps in a different fake shape. But these two are
@@ -12,7 +14,8 @@ const { createDb, IORedisCtor, QueueCtor, add } = vi.hoisted(() => ({
   QueueCtor: vi.fn(function (..._args: unknown[]): unknown {
     return { add: vi.fn() };
   }),
-  add: vi.fn(),
+  // BullMQ resolves `add` with the created Job.
+  add: vi.fn(async (..._args: unknown[]) => ({ id: "job-1" })),
 }));
 
 vi.mock("@ally-fix/db", () => ({ createDb }));
@@ -131,6 +134,55 @@ describe("enqueueAudit", () => {
     await enqueueAudit({ auditId: "a-2", url: "https://example.com/" });
 
     expect(QueueCtor).toHaveBeenCalledOnce();
+  });
+
+  describe("with tracing on", () => {
+    let spans: SpanCapture;
+    beforeAll(() => {
+      spans = captureSpans();
+    });
+    beforeEach(() => spans.reset());
+    afterAll(() => spans.stop());
+
+    it("carries the request's trace context in the job, under a producer span", async () => {
+      vi.stubEnv("REDIS_URL", "redis://localhost:6379");
+      QueueCtor.mockImplementation(function () {
+        return { add };
+      });
+
+      await withSpan("POST /api/audits", { kind: SpanKind.SERVER }, () =>
+        enqueueAudit({ auditId: "a-1", url: "https://example.com/" }),
+      );
+
+      const producer = spans.span("publish audit-scan");
+      expect(producer.kind).toBe(SpanKind.PRODUCER);
+      expect(producer.parentSpanContext?.spanId).toBe(
+        spans.span("POST /api/audits").spanContext().spanId,
+      );
+      expect(producer.attributes).toMatchObject({
+        "messaging.destination.name": "audit-scan",
+        "messaging.message.id": "job-1",
+        "allyfix.audit.id": "a-1",
+      });
+
+      // The worker's span becomes a child of the producer span, not of the request.
+      const data = add.mock.calls[0]?.[1] as { trace: Record<string, string> };
+      const { traceId, spanId } = producer.spanContext();
+      expect(data.trace.traceparent).toBe(`00-${traceId}-${spanId}-01`);
+    });
+
+    it("records a failed enqueue on the producer span", async () => {
+      vi.stubEnv("REDIS_URL", "redis://localhost:6379");
+      add.mockRejectedValueOnce(new Error("Redis unreachable"));
+      QueueCtor.mockImplementation(function () {
+        return { add };
+      });
+
+      await expect(enqueueAudit({ auditId: "a-1", url: "https://example.com/" })).rejects.toThrow(
+        "Redis unreachable",
+      );
+      expect(spans.span("publish audit-scan").status.message).toBe("Redis unreachable");
+    });
   });
 });
 

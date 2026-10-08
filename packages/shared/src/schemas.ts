@@ -62,5 +62,12 @@ export type CreateAuditRequest = z.infer<typeof createAuditRequestSchema>;
 export const auditJobPayloadSchema = z.object({
   auditId: z.string().uuid(),
   url: z.string().url(),
+  /**
+   * W3C trace context (`traceparent`, `tracestate`) from the request that
+   * enqueued the job, so the worker's spans join the same trace. Optional both
+   * ways: a job from an older web build still parses, and an older worker
+   * strips the field it does not know.
+   */
+  trace: z.record(z.string(), z.string()).optional(),
 });
 export type AuditJobPayload = z.infer<typeof auditJobPayloadSchema>;

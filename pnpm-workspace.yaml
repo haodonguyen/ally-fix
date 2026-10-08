@@ -8,4 +8,6 @@ overrides:
 allowBuilds:
   esbuild: true
   msgpackr-extract: true
+  # Only prints a version notice; the OTLP exporters need none of its build output.
+  protobufjs: false
   sharp: true

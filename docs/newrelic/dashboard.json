@@ -1,0 +1,434 @@
+{
+  "name": "AllyFix",
+  "description": "Scan pipeline, LLM health and cost, and the web app. Built from OpenTelemetry data; see docs/observability.md.",
+  "permissions": "PUBLIC_READ_WRITE",
+  "pages": [
+    {
+      "name": "Pipeline",
+      "description": null,
+      "widgets": [
+        {
+          "title": "Audits by outcome",
+          "layout": {
+            "column": 1,
+            "row": 1,
+            "width": 4,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.billboard"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountIds": [0],
+                "query": "SELECT count(allyfix.audit.duration) FROM Metric WHERE service.name = 'ally-fix-worker' FACET allyfix.audit.outcome SINCE 1 day ago"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Queue wait (s) \u2014 how long scans waited for a worker",
+          "layout": {
+            "column": 5,
+            "row": 1,
+            "width": 4,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.line"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountIds": [0],
+                "query": "SELECT percentile(allyfix.audit.queue_wait, 50, 95) FROM Metric WHERE service.name = 'ally-fix-worker' TIMESERIES AUTO"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Audit duration (s)",
+          "layout": {
+            "column": 9,
+            "row": 1,
+            "width": 4,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.line"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountIds": [0],
+                "query": "SELECT percentile(allyfix.audit.duration, 50, 95) FROM Metric WHERE service.name = 'ally-fix-worker' FACET allyfix.audit.outcome TIMESERIES AUTO"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Scan duration (s) and issues per scan",
+          "layout": {
+            "column": 1,
+            "row": 4,
+            "width": 4,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.line"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountIds": [0],
+                "query": "SELECT percentile(allyfix.scan.duration, 95) AS 'scan p95 (s)', average(allyfix.scan.issues) AS 'issues/scan' FROM Metric WHERE service.name = 'ally-fix-worker' TIMESERIES AUTO"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Audits recovered by the reaper (a worker died mid-scan)",
+          "layout": {
+            "column": 5,
+            "row": 4,
+            "width": 4,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.billboard"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountIds": [0],
+                "query": "SELECT sum(allyfix.audit.recovered) FROM Metric WHERE service.name = 'ally-fix-worker' SINCE 1 week ago"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Worker event-loop utilization",
+          "layout": {
+            "column": 9,
+            "row": 4,
+            "width": 4,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.line"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountIds": [0],
+                "query": "SELECT average(nodejs.eventloop.utilization) FROM Metric WHERE service.name = 'ally-fix-worker' TIMESERIES AUTO"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Failed audits \u2014 latest",
+          "layout": {
+            "column": 1,
+            "row": 7,
+            "width": 12,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountIds": [0],
+                "query": "SELECT latest(allyfix.audit.id) AS 'audit', latest(otel.status_description) AS 'error', latest(duration.ms) AS 'ms' FROM Span WHERE service.name = 'ally-fix-worker' AND name = 'process audit-scan' AND otel.status_code = 'ERROR' FACET trace.id SINCE 1 day ago LIMIT 20"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "LLM",
+      "description": null,
+      "widgets": [
+        {
+          "title": "Rule groups by outcome",
+          "layout": {
+            "column": 1,
+            "row": 1,
+            "width": 4,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.area"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountIds": [0],
+                "query": "SELECT sum(allyfix.llm.rule_groups) FROM Metric WHERE service.name = 'ally-fix-worker' FACET allyfix.llm.outcome TIMESERIES AUTO"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Tokens by model and type (failed attempts included)",
+          "layout": {
+            "column": 5,
+            "row": 1,
+            "width": 4,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.bar"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountIds": [0],
+                "query": "SELECT sum(gen_ai.client.token.usage) FROM Metric WHERE service.name = 'ally-fix-worker' FACET gen_ai.request.model, gen_ai.token.type SINCE 1 week ago"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Spend (USD) \u2014 priced models only",
+          "layout": {
+            "column": 9,
+            "row": 1,
+            "width": 4,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.billboard"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountIds": [0],
+                "query": "SELECT sum(allyfix.llm.cost) FROM Metric WHERE service.name = 'ally-fix-worker' FACET gen_ai.request.model SINCE 1 week ago"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Provider latency per attempt (s)",
+          "layout": {
+            "column": 1,
+            "row": 4,
+            "width": 4,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.line"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountIds": [0],
+                "query": "SELECT percentile(gen_ai.client.operation.duration, 50, 95) FROM Metric WHERE service.name = 'ally-fix-worker' FACET gen_ai.request.model TIMESERIES AUTO"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Failed attempts by class (ADR-0005 axes)",
+          "layout": {
+            "column": 5,
+            "row": 4,
+            "width": 8,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountIds": [0],
+                "query": "SELECT count(*) FROM Span WHERE service.name = 'ally-fix-worker' AND name LIKE 'chat %' AND error.type IS NOT NULL FACET error.type, allyfix.llm.retryable, allyfix.llm.trips_breaker SINCE 1 day ago"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Groups skipped by an open circuit",
+          "layout": {
+            "column": 1,
+            "row": 7,
+            "width": 6,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.line"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountIds": [0],
+                "query": "SELECT sum(allyfix.llm.rule_groups) FROM Metric WHERE service.name = 'ally-fix-worker' AND allyfix.llm.outcome = 'skipped' TIMESERIES AUTO"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Worker warnings and errors",
+          "layout": {
+            "column": 7,
+            "row": 7,
+            "width": 6,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountIds": [0],
+                "query": "SELECT severity.text, message, auditId, ruleId, err.message FROM Log WHERE service.name = 'ally-fix-worker' AND severity.text IN ('WARN', 'ERROR') SINCE 1 day ago LIMIT 50"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Web",
+      "description": null,
+      "widgets": [
+        {
+          "title": "Request rate and errors",
+          "layout": {
+            "column": 1,
+            "row": 1,
+            "width": 6,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.line"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountIds": [0],
+                "query": "SELECT rate(count(*), 1 minute) AS 'requests/min', filter(count(*), WHERE otel.status_code = 'ERROR') AS 'errors' FROM Span WHERE service.name = 'ally-fix-web' AND span.kind = 'server' TIMESERIES AUTO"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Request latency by route (ms)",
+          "layout": {
+            "column": 7,
+            "row": 1,
+            "width": 6,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.table"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountIds": [0],
+                "query": "SELECT percentile(duration.ms, 50, 95), count(*) FROM Span WHERE service.name = 'ally-fix-web' AND span.kind = 'server' FACET name SINCE 1 day ago"
+              }
+            ]
+          }
+        },
+        {
+          "title": "Enqueue failures (scan queue unavailable)",
+          "layout": {
+            "column": 1,
+            "row": 4,
+            "width": 6,
+            "height": 3
+          },
+          "linkedEntityGuids": null,
+          "visualization": {
+            "id": "viz.billboard"
+          },
+          "rawConfiguration": {
+            "facet": {
+              "showOtherSeries": false
+            },
+            "nrqlQueries": [
+              {
+                "accountIds": [0],
+                "query": "SELECT count(*) FROM Span WHERE service.name = 'ally-fix-web' AND name = 'publish audit-scan' AND otel.status_code = 'ERROR' SINCE 1 day ago"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "variables": []
+}

@@ -42,7 +42,21 @@ export interface LoggerOptions {
   /** Injectable for tests. Defaults to stdout. */
   sink?: (line: string) => void;
   now?: () => Date;
+  /**
+   * Fields computed per line rather than fixed at `child()` time — the active
+   * trace id, which follows async context and so cannot be bound in advance.
+   * Kept as a hook so this module stays free of any tracing dependency.
+   */
+  context?: () => LogFields | undefined;
+  /**
+   * Receives every emitted record, already sanitized, alongside the sink. For
+   * shipping logs to a collector without parsing them back out of stdout.
+   */
+  tap?: (record: LogRecord) => void;
 }
+
+/** One emitted line, before rendering. */
+export type LogRecord = { ts: string; level: LogLevel; msg: string } & LogFields;
 
 /**
  * Field names whose values are never printed. Matched case-insensitively as a
@@ -123,16 +137,32 @@ export function createLogger(options: LoggerOptions = {}): Logger {
   const sink = options.sink ?? ((line: string) => process.stdout.write(line + "\n"));
   const now = options.now ?? (() => new Date());
 
+  /** A hook that throws must cost its own output, never the log line. */
+  function contextFields(): LogFields {
+    try {
+      return options.context?.() ?? {};
+    } catch {
+      return {};
+    }
+  }
+
   function build(base: LogFields): Logger {
     function write(level: LogLevel, message: string, fields?: LogFields): void {
       if (LEVEL_ORDER[level] < minimum) return;
-      const record: LogFields = {
+      const record: LogRecord = {
         ts: now().toISOString(),
         level,
         msg: message,
-        ...sanitize({ ...base, ...fields }),
+        ...sanitize({ ...contextFields(), ...base, ...fields }),
       };
       sink(format === "pretty" ? renderPretty(record) : safeStringify(record));
+      if (options.tap) {
+        try {
+          options.tap(record);
+        } catch {
+          // Shipping is best-effort; the stdout line above already happened.
+        }
+      }
     }
 
     return {

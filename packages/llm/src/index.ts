@@ -6,7 +6,7 @@ export type {
   LlmAnalysisResult,
   LlmClient,
 } from "./types";
-export { createLlmClient, backoffDelay, coerceRawOutput } from "./client";
+export { createLlmClient, backoffDelay, coerceRawOutput, genAiProviderName } from "./client";
 export type { CreateLlmClientOptions, SingleShotGenerate, SingleShotResult } from "./client";
 export { readUsage, addUsage, estimateCostUsd, defaultPricesFor, EMPTY_USAGE } from "./usage";
 export type { TokenUsage, TokenPrices } from "./usage";

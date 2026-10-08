@@ -19,6 +19,7 @@ sequence of decisions is the point; a tidied-up ADR is just documentation.
 | [0006](./0006-structured-logging.md)                     | Log structured records, with a hand-written logger                       | Accepted |
 | [0007](./0007-ground-prompts-in-wcag.md)                 | Ground prompts in the standard, at criterion level only                  | Accepted |
 | [0008](./0008-tokens-are-measured-cost-is-configured.md) | Report tokens as measurement and cost as configuration                   | Accepted |
+| [0009](./0009-opentelemetry-to-new-relic.md)             | Instrument with OpenTelemetry, send it to New Relic                      | Accepted |
 
 ## Format
 

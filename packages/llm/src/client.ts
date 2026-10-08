@@ -1,4 +1,6 @@
 import { llmIssueAnalysisSchema } from "@ally-fix/shared";
+import { SpanKind, withSpan, type Span } from "@ally-fix/telemetry";
+import { metrics, type Meter } from "@opentelemetry/api";
 import { generateObject } from "ai";
 import { createCircuitBreaker, type CircuitBreaker } from "./circuit-breaker";
 import {
@@ -73,6 +75,11 @@ export interface CreateLlmClientOptions {
    * Default true. The eval flips it to measure what grounding is worth.
    */
   grounded?: boolean;
+  /**
+   * Where token and latency metrics go. Defaults to the global meter, read when
+   * the client is created — so the SDK has to be started before that.
+   */
+  meter?: Meter;
   /** Test seams. */
   generate?: SingleShotGenerate;
   throttle?: Throttle;
@@ -181,6 +188,31 @@ export function coerceRawOutput(raw: unknown): unknown {
 }
 
 /**
+ * `gen_ai.provider.name` as the OpenTelemetry GenAI conventions spell it, so the
+ * same query works across services that follow them. Ollama has no registered
+ * value; its own name is the convention's fallback.
+ */
+export function genAiProviderName(provider: LlmConfig["provider"]): string {
+  return provider === "gemini" ? "gcp.gemini" : provider;
+}
+
+/**
+ * The failure taxonomy (ADR-0005), written onto the span. In a trace, a run of
+ * retried attempts reads differently when each one says whether it was worth
+ * retrying and whether it counted against the provider's health.
+ */
+function annotateFailure(span: Span, error: unknown): void {
+  if (error instanceof LlmError) {
+    span.setAttribute("allyfix.llm.retryable", error.retryable);
+    span.setAttribute("allyfix.llm.trips_breaker", error.tripsBreaker);
+  }
+}
+
+function errorType(error: unknown): string {
+  return error instanceof Error ? error.name : "_OTHER";
+}
+
+/**
  * Creates a provider-agnostic LLM client with the full outbound failure policy:
  * a per-attempt deadline, rate limiting, retry with jittered backoff, and a
  * circuit breaker. Structured output is validated against `llmIssueAnalysisSchema`
@@ -215,6 +247,42 @@ export function createLlmClient(
       resetTimeoutMs: options.circuitBreakerResetMs ?? 30_000,
     });
 
+  // Instruments are created here rather than at import: the metrics API has no
+  // proxy, so one made before the SDK starts would stay a no-op for good.
+  const meter = options.meter ?? metrics.getMeter("@ally-fix/llm");
+  const tokenUsage = meter.createHistogram("gen_ai.client.token.usage", {
+    description: "Tokens per provider call, failed attempts included",
+    unit: "{token}",
+  });
+  const operationDuration = meter.createHistogram("gen_ai.client.operation.duration", {
+    description: "Provider call latency, per attempt",
+    unit: "s",
+  });
+  const costCounter = meter.createCounter("allyfix.llm.cost", {
+    description: "Spend on provider calls; only recorded when a price is configured",
+    unit: "USD",
+  });
+  const providerName = genAiProviderName(config.provider);
+  const baseAttributes = {
+    "gen_ai.operation.name": "chat",
+    "gen_ai.provider.name": providerName,
+    "gen_ai.request.model": config.model,
+  };
+
+  /**
+   * Turns one attempt's usage into metrics. Called for attempts whose answer
+   * was then thrown away too: they were billed (ADR-0008).
+   */
+  function recordUsage(usage: TokenUsage | null): void {
+    if (usage === null) return;
+    tokenUsage.record(usage.inputTokens, { ...baseAttributes, "gen_ai.token.type": "input" });
+    tokenUsage.record(usage.outputTokens, { ...baseAttributes, "gen_ai.token.type": "output" });
+    const cost = estimateCostUsd(usage, prices);
+    // An unpriced call adds nothing rather than zero, so a sum over this
+    // counter never presents "unknown" as "free".
+    if (cost !== null) costCounter.add(cost, baseAttributes);
+  }
+
   const generate: SingleShotGenerate =
     options.generate ??
     (async ({ system, prompt, signal }) => {
@@ -238,60 +306,127 @@ export function createLlmClient(
    * still billed, so its tokens have to be counted even though its content is
    * thrown away.
    */
-  async function attempt(prompt: string, spend: (usage: TokenUsage | null) => void) {
+  async function attempt(
+    prompt: string,
+    attemptNumber: number,
+    spend: (usage: TokenUsage | null) => void,
+  ) {
     await throttle.acquire();
 
-    const result = await withTimeout(timeoutMs, (signal) =>
-      generate({ system, prompt, signal }),
-    ).catch((error: unknown) => {
-      // Anything thrown by the provider becomes a typed provider error, so the
-      // breaker and the retry loop can classify it without duck-typing.
-      if (error instanceof LlmTimeoutError) throw error;
-      throw classifyProviderError(error);
-    });
+    // Opened after the throttle, so its duration is the provider's latency and
+    // not our own queueing. The HTTP span undici records nests underneath it.
+    return withSpan(
+      `chat ${config.model}`,
+      {
+        kind: SpanKind.CLIENT,
+        attributes: { ...baseAttributes, "allyfix.llm.attempt": attemptNumber },
+      },
+      async (span) => {
+        const startedAt = performance.now();
+        let failure: unknown;
+        try {
+          const result = await withTimeout(timeoutMs, (signal) =>
+            generate({ system, prompt, signal }),
+          ).catch((error: unknown) => {
+            // Anything thrown by the provider becomes a typed provider error, so the
+            // breaker and the retry loop can classify it without duck-typing.
+            if (error instanceof LlmTimeoutError) throw error;
+            throw classifyProviderError(error);
+          });
 
-    spend(result.usage);
+          spend(result.usage);
+          recordUsage(result.usage);
+          if (result.usage) {
+            span.setAttribute("gen_ai.usage.input_tokens", result.usage.inputTokens);
+            span.setAttribute("gen_ai.usage.output_tokens", result.usage.outputTokens);
+          }
 
-    const parsed = llmIssueAnalysisSchema.safeParse(coerceRawOutput(result.output));
-    if (!parsed.success) throw new LlmValidationError(parsed.error.message, parsed.error);
-    return parsed.data;
+          const parsed = llmIssueAnalysisSchema.safeParse(coerceRawOutput(result.output));
+          if (!parsed.success) throw new LlmValidationError(parsed.error.message, parsed.error);
+          return parsed.data;
+        } catch (error) {
+          failure = error;
+          annotateFailure(span, error);
+          throw error;
+        } finally {
+          operationDuration.record(
+            (performance.now() - startedAt) / 1000,
+            failure === undefined
+              ? baseAttributes
+              : { ...baseAttributes, "error.type": errorType(failure) },
+          );
+        }
+      },
+    );
   }
 
   return {
     promptFingerprint: promptFingerprint(grounded),
 
     async analyzeIssueGroup(input: IssueGroupInput): Promise<LlmAnalysisResult> {
-      const prompt = buildAnalysisPrompt(input, { grounded });
-      let lastError: unknown;
-      let attempts = 0;
-      // Accumulated across attempts, so a group that only parsed on the third try
-      // reports all three calls. Charging for one would make retries look free.
-      let usage: TokenUsage | null = null;
-      const spend = (attemptUsage: TokenUsage | null) => {
-        usage = addUsage(usage, attemptUsage);
-      };
+      return withSpan(
+        "llm.analyze_group",
+        {
+          attributes: {
+            ...baseAttributes,
+            "allyfix.llm.rule_id": input.ruleId,
+            "allyfix.llm.snippets": input.htmlSnippets.length,
+            // Read before the first attempt: a group that starts against an open
+            // circuit explains its own missing chat spans.
+            "allyfix.llm.breaker_state": breaker.state,
+          },
+        },
+        async (span) => {
+          const prompt = buildAnalysisPrompt(input, { grounded });
+          let lastError: unknown;
+          let attempts = 0;
+          // Accumulated across attempts, so a group that only parsed on the third try
+          // reports all three calls. Charging for one would make retries look free.
+          let usage: TokenUsage | null = null;
+          const spend = (attemptUsage: TokenUsage | null) => {
+            usage = addUsage(usage, attemptUsage);
+          };
+          const finish = () => {
+            span.setAttribute("allyfix.llm.attempts", attempts);
+            const total = usage as TokenUsage | null;
+            if (total) {
+              span.setAttribute("gen_ai.usage.input_tokens", total.inputTokens);
+              span.setAttribute("gen_ai.usage.output_tokens", total.outputTokens);
+            }
+            const costUsd = estimateCostUsd(total, prices);
+            if (costUsd !== null) span.setAttribute("allyfix.llm.cost_usd", costUsd);
+            return costUsd;
+          };
 
-      for (let tries = 0; tries <= maxRetries; tries++) {
-        attempts++;
-        try {
-          // The breaker wraps each attempt rather than the whole loop, so a
-          // provider that dies mid-retry short-circuits the remaining attempts.
-          const analysis = await breaker.execute(() => attempt(prompt, spend));
-          return { analysis, usage, costUsd: estimateCostUsd(usage, prices), attempts };
-        } catch (error) {
-          lastError = error;
-          // Don't waste attempts (and quota) on errors that can't succeed on
-          // retry: a 401 for a bad key, a 404 for an unknown model, or an open
-          // circuit that is deliberately refusing calls.
-          if (error instanceof LlmError && !error.retryable) break;
-          if (tries < maxRetries) {
-            const delay = backoffDelay(tries, retryDelayMs, maxRetryDelayMs, random);
-            if (delay > 0) await sleep(delay);
+          for (let tries = 0; tries <= maxRetries; tries++) {
+            attempts++;
+            try {
+              // The breaker wraps each attempt rather than the whole loop, so a
+              // provider that dies mid-retry short-circuits the remaining attempts.
+              const analysis = await breaker.execute(() => attempt(prompt, attempts, spend));
+              return { analysis, usage, costUsd: finish(), attempts };
+            } catch (error) {
+              lastError = error;
+              // Don't waste attempts (and quota) on errors that can't succeed on
+              // retry: a 401 for a bad key, a 404 for an unknown model, or an open
+              // circuit that is deliberately refusing calls.
+              if (error instanceof LlmError && !error.retryable) break;
+              if (tries < maxRetries) {
+                const delay = backoffDelay(tries, retryDelayMs, maxRetryDelayMs, random);
+                if (delay > 0) await sleep(delay);
+              }
+            }
           }
-        }
-      }
 
-      throw new LlmAnalysisError(attempts, lastError, usage);
+          finish();
+          // The group span carries why the *last* attempt failed — the one that
+          // decided the outcome — while each chat span keeps its own.
+          annotateFailure(span, lastError);
+          if (lastError instanceof Error)
+            span.setAttribute("allyfix.llm.last_error", lastError.name);
+          throw new LlmAnalysisError(attempts, lastError, usage);
+        },
+      );
     },
   };
 }

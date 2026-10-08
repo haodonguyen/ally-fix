@@ -38,6 +38,13 @@ describe("sweepStaleAudits", () => {
     await expect(sweepStaleAudits(deps())).resolves.toBe(3);
   });
 
+  it("counts recovered audits as a metric, since each is a worker that died mid-scan", async () => {
+    failStaleRunningAudits.mockResolvedValue(3);
+    const recovered = vi.fn();
+    await sweepStaleAudits(deps({ metrics: { recovered } }));
+    expect(recovered).toHaveBeenCalledWith(3);
+  });
+
   it("stays quiet when there is nothing to recover", async () => {
     const captured = createFakeLogger();
     await sweepStaleAudits(deps({ logger: captured.logger }));

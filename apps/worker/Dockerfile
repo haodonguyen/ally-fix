@@ -13,6 +13,7 @@ COPY pnpm-workspace.yaml package.json pnpm-lock.yaml .npmrc ./
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/db/package.json ./packages/db/
 COPY packages/llm/package.json ./packages/llm/
+COPY packages/telemetry/package.json ./packages/telemetry/
 COPY apps/worker/package.json ./apps/worker/
 
 # Install only what the worker needs.
