@@ -1,5 +1,6 @@
 import { failStaleRunningAudits, type Database } from "@ally-fix/db";
 import type { Logger } from "@ally-fix/shared/logger";
+import type { AuditMetrics } from "./telemetry";
 
 /**
  * Recovers audits orphaned by a worker that died mid-scan.
@@ -21,6 +22,8 @@ export interface ReaperDeps {
   /** How often to sweep after the initial pass. */
   intervalMs: number;
   logger: Logger;
+  /** A recovered audit is a worker that died mid-scan — worth alerting on. */
+  metrics?: Pick<AuditMetrics, "recovered">;
   now?: () => number;
 }
 
@@ -31,6 +34,7 @@ export async function sweepStaleAudits(deps: ReaperDeps): Promise<number> {
   try {
     const swept = await failStaleRunningAudits(deps.db, cutoff, STALE_AUDIT_REASON);
     if (swept > 0) {
+      deps.metrics?.recovered(swept);
       deps.logger.warn("recovered abandoned audits", { swept, staleAfterMs: deps.staleAfterMs });
     }
     return swept;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createLogger, loggerOptionsFromEnv, type LogFields } from "./logger";
+import { createLogger, loggerOptionsFromEnv, type LogFields, type LogRecord } from "./logger";
 
 /** Collects emitted lines and parses them back out of JSON. */
 function capture(options: Parameters<typeof createLogger>[0] = {}) {
@@ -163,6 +163,79 @@ describe("robustness", () => {
 
     expect(() => logger.info("odd payload", { circular })).not.toThrow();
     expect(records()[0]?.msg).toBe("odd payload");
+  });
+});
+
+describe("per-line context", () => {
+  it("evaluates the hook on every line, so the fields follow whatever is active", () => {
+    let traceId = "t-1";
+    const { logger, records } = capture({ context: () => ({ "trace.id": traceId }) });
+    const child = logger.child({ auditId: "a-1" });
+
+    child.info("scan started");
+    traceId = "t-2";
+    child.info("scan finished");
+
+    expect(records().map((r) => r["trace.id"])).toEqual(["t-1", "t-2"]);
+    expect(records()[1]?.auditId).toBe("a-1");
+  });
+
+  it("lets the call site's own fields win over the hook's", () => {
+    const { logger, records } = capture({ context: () => ({ source: "hook" }) });
+    logger.info("x", { source: "call" });
+    expect(records()[0]?.source).toBe("call");
+  });
+
+  it("writes the line without the hook's fields when the hook throws", () => {
+    const { logger, records } = capture({
+      context: () => {
+        throw new Error("tracing broke");
+      },
+    });
+    logger.info("still logged", { auditId: "a-1" });
+    expect(records()[0]).toMatchObject({ msg: "still logged", auditId: "a-1" });
+  });
+
+  it("adds nothing when the hook has nothing to add", () => {
+    const { logger, records } = capture({ context: () => undefined });
+    logger.info("x");
+    expect(Object.keys(records()[0] ?? {})).toEqual(["ts", "level", "msg"]);
+  });
+});
+
+describe("tap", () => {
+  it("receives each emitted record, already redacted", () => {
+    const tapped: LogRecord[] = [];
+    const { logger } = capture({ tap: (record) => tapped.push(record) });
+
+    logger.child({ auditId: "a-1" }).warn("provider rejected key", { apiKey: "gsk_live" });
+
+    expect(tapped).toEqual([
+      {
+        ts: "2026-08-29T12:34:56.789Z",
+        level: "warn",
+        msg: "provider rejected key",
+        auditId: "a-1",
+        apiKey: "[redacted]",
+      },
+    ]);
+  });
+
+  it("is not called for lines below the level", () => {
+    const tapped: LogRecord[] = [];
+    const { logger } = capture({ level: "info", tap: (record) => tapped.push(record) });
+    logger.debug("noise");
+    expect(tapped).toEqual([]);
+  });
+
+  it("cannot break logging by throwing", () => {
+    const { logger, lines } = capture({
+      tap: () => {
+        throw new Error("collector down");
+      },
+    });
+    expect(() => logger.error("audit failed")).not.toThrow();
+    expect(lines).toHaveLength(1);
   });
 });
 

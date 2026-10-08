@@ -1,4 +1,5 @@
 import { AUDIT_QUEUE_NAME, type AuditJobPayload } from "@ally-fix/shared";
+import { SpanKind, injectTraceContext, withSpan } from "@ally-fix/telemetry";
 import { Queue } from "bullmq";
 import { getRedis } from "./redis";
 
@@ -16,7 +17,36 @@ function getQueue(): Queue {
   return globalForQueue.__allyfixQueue;
 }
 
-/** Push an audit job onto the queue for the worker to pick up. */
-export async function enqueueAudit(payload: AuditJobPayload): Promise<void> {
-  await getQueue().add("scan", payload, { removeOnComplete: 1000, removeOnFail: 1000 });
+/**
+ * Push an audit job onto the queue for the worker to pick up.
+ *
+ * The job carries this request's trace context, so the worker's spans continue
+ * the same trace: in New Relic, one trace runs from the POST, through however
+ * long the job waited in Redis, to the finished scan. A queue is otherwise
+ * where distributed traces go to die — nothing propagates through it unless
+ * the payload carries it.
+ */
+export async function enqueueAudit(payload: Omit<AuditJobPayload, "trace">): Promise<void> {
+  await withSpan(
+    `publish ${AUDIT_QUEUE_NAME}`,
+    {
+      kind: SpanKind.PRODUCER,
+      attributes: {
+        "messaging.system": "bullmq",
+        "messaging.operation.type": "send",
+        "messaging.destination.name": AUDIT_QUEUE_NAME,
+        "allyfix.audit.id": payload.auditId,
+      },
+    },
+    async (span) => {
+      // Injected inside the producer span, so the worker's span is its child.
+      const trace = injectTraceContext();
+      const job = await getQueue().add(
+        "scan",
+        { ...payload, ...(Object.keys(trace).length > 0 && { trace }) },
+        { removeOnComplete: 1000, removeOnFail: 1000 },
+      );
+      if (job.id) span.setAttribute("messaging.message.id", job.id);
+    },
+  );
 }

@@ -109,6 +109,18 @@ call; stop it (Ctrl-C) when done. Submitted audits process the moment it's up.
 | `GROQ_API_KEY`             |              |       ✅       | Bring-your-own-key; stays local       |
 | `GROQ_MODEL`               |              |       ✅       | `openai/gpt-oss-20b`                  |
 | `SCAN_TIMEOUT_MS`          |              |       ✅       | Optional, default `30000`             |
+| `NEW_RELIC_LICENSE_KEY`    |   optional   |    optional    | Turns on New Relic telemetry          |
+| `NEW_RELIC_REGION`         |   optional   |    optional    | `us` (default) or `eu`                |
+
+## Observability (optional): New Relic
+
+Set `NEW_RELIC_LICENSE_KEY` (an **ingest license** key) in Vercel's environment
+variables and in the worker's local `.env`, and both services send traces,
+metrics and logs to New Relic. A scan becomes one trace from the web request,
+through the queue, to the worker. Leave it unset and nothing is exported. For
+the web app's logs, also add Vercel's New Relic integration (a log drain). Full
+details, a dashboard to import, and alert suggestions are in
+[`docs/observability.md`](./docs/observability.md).
 
 ## Want it fully hosted instead?
 

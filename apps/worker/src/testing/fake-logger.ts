@@ -1,4 +1,9 @@
-import { createLogger, type LogFields, type Logger } from "@ally-fix/shared/logger";
+import {
+  createLogger,
+  type LogFields,
+  type Logger,
+  type LoggerOptions,
+} from "@ally-fix/shared/logger";
 
 /**
  * A real logger writing into an array instead of stdout.
@@ -17,9 +22,11 @@ export interface CapturedLogger {
   first(message: string): LogFields | undefined;
 }
 
-export function createFakeLogger(): CapturedLogger {
+/** `options` adds hooks the production logger has, such as trace context. */
+export function createFakeLogger(options: Pick<LoggerOptions, "context"> = {}): CapturedLogger {
   const records: LogFields[] = [];
   const logger = createLogger({
+    ...options,
     level: "debug",
     format: "json",
     sink: (line) => records.push(JSON.parse(line) as LogFields),

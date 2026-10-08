@@ -1,5 +1,8 @@
+// First, so the OpenTelemetry SDK is registered before anything creates a meter.
+import { telemetry } from "./instrument";
 import { createDb } from "@ally-fix/db";
 import { AUDIT_QUEUE_NAME } from "@ally-fix/shared";
+import { describeDestination } from "@ally-fix/telemetry";
 import { createLlmClient } from "@ally-fix/llm";
 import { Worker } from "bullmq";
 import IORedis from "ioredis";
@@ -9,6 +12,7 @@ import { createAuditProcessor } from "./process-audit";
 import { startReaper } from "./reaper";
 import { scanUrl } from "./scanner";
 import { createShutdownHandler } from "./shutdown";
+import { createAuditMetrics, telemetryConfig } from "./telemetry";
 
 /**
  * AllyFix scanner worker — process wiring only.
@@ -28,6 +32,7 @@ const llmConfig = resolveLlmConfig();
 // One client for the whole process, not one per job: its rate limiter and circuit
 // breaker are only meaningful if every concurrent audit shares the same instance.
 const llmClient = createLlmClient(llmConfig, resolveLlmClientOptions(llmConfig));
+const auditMetrics = createAuditMetrics();
 
 const processAudit = createAuditProcessor({
   db,
@@ -39,6 +44,7 @@ const processAudit = createAuditProcessor({
   llmPrices: resolveLlmPrices(),
   scan: scanUrl,
   logger,
+  metrics: auditMetrics,
 });
 
 const worker = new Worker(AUDIT_QUEUE_NAME, processAudit, { connection, concurrency: 2 });
@@ -50,6 +56,7 @@ const stopReaper = startReaper({
   staleAfterMs: env.STALE_AUDIT_AFTER_MS,
   intervalMs: env.STALE_SWEEP_INTERVAL_MS,
   logger,
+  metrics: auditMetrics,
 });
 
 // Queue-level outcomes. The processor logs the detail; these record what BullMQ
@@ -67,6 +74,9 @@ const shutdown = createShutdownHandler({
   closeConnections: async () => {
     stopReaper();
     await Promise.allSettled([connection.quit(), cacheRedis.quit()]);
+    // Last, so the spans and logs of the scans that just finished are in the
+    // final export. Bounded inside, so a dead collector cannot outlast SIGKILL.
+    await telemetry.shutdown();
   },
   graceMs: env.SHUTDOWN_GRACE_MS,
   exit: (code) => process.exit(code),
@@ -86,4 +96,5 @@ logger.info("worker started", {
   // Says at startup whether cost will be reported at all, so an operator finds
   // out here rather than from a month of null costUsd fields.
   pricing: resolveLlmPrices() ? "configured" : "not configured",
+  telemetry: describeDestination(telemetryConfig),
 });

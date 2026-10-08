@@ -42,6 +42,11 @@ export default defineConfig({
         // pool, and a BullMQ worker; the logic it used to hold now lives in
         // process-audit.ts, which is tested.
         "apps/worker/src/index.ts",
+        // Same: one line that starts the OpenTelemetry SDK. What it starts is
+        // tested in packages/telemetry against a local OTLP endpoint.
+        "apps/worker/src/instrument.ts",
+        // In-memory SDK pipelines for other suites' assertions — scaffolding.
+        "packages/telemetry/src/testing.ts",
         // Needs a real Chromium to exercise. Its security-critical half is
         // `assertUrlIsSafe`, which is covered in packages/shared.
         "apps/worker/src/scanner.ts",

@@ -218,10 +218,44 @@ question anyone asks of production logs: _what happened to **this** audit?_
 a Postgres blip would have the platform restart a healthy app. `GET /api/ready` is
 readiness, checks both dependencies, and names which one is down.
 
+### …across both services, in New Relic
+
+Filtering by `auditId` correlates the web app's logs with the worker's; it does
+not connect them. With `NEW_RELIC_LICENSE_KEY` set, both services export
+**OpenTelemetry** traces, metrics and logs to New Relic, and one scan is **one
+trace** — from the POST, through however long the job sat in Redis waiting for an
+on-demand worker, to each LLM attempt:
+
+```
+POST /api/audits → publish audit-scan → process audit-scan → audit.analyze
+  → llm.analyze_group (image-alt) → chat llama3.1 ✗ LlmValidationError retryable=true trips_breaker=false
+                                  → chat llama3.1 ✓ 900 in / 120 out
+```
+
+- **The trace crosses the queue.** HTTP propagates context in headers; a BullMQ
+  job is a JSON blob, so the web app writes `traceparent` into the payload and the
+  worker continues from it.
+- **Failed attempts carry the two-axis taxonomy** as span attributes, so a retry
+  storm explains itself — and the "provider down" alert keys off groups the
+  circuit breaker _skipped_, not off any one bad answer.
+- **Logs link to their trace** (`trace.id` / `span.id` on every line), and the
+  worker ships them itself, after redaction, because on a laptop nothing collects
+  stdout.
+- **Token metrics follow the GenAI semantic conventions** and count failed
+  attempts too; an unpriced model adds nothing to the cost counter rather than
+  zero.
+- **Off by default, vendor-neutral by construction.** Every line of
+  instrumentation is OpenTelemetry; New Relic is a URL and a header. The SDK
+  flushes on SIGTERM, bounded so an unreachable endpoint cannot outlast SIGKILL.
+
+Setup, a dashboard to import, and alert queries are in
+[`docs/observability.md`](./docs/observability.md); why OpenTelemetry rather than
+the New Relic agent is [ADR-0009](./docs/adr/0009-opentelemetry-to-new-relic.md).
+
 ## How this is tested
 
-**402 tests**, gated in CI at 90% statements / 88% branches / 88% functions / 90%
-lines against measured 97.2 / 91.6 / 96.3 / 98.5 — now including the eval harness,
+**475 tests**, gated in CI at 90% statements / 88% branches / 88% functions / 90%
+lines against measured 97.7 / 91.9 / 97.3 / 98.9 — now including the eval harness,
 which was opted into the measurement once it grew real logic. The thresholds are a **ratchet**
 set at what the suite reaches, so a drop fails the build.
 
@@ -237,7 +271,10 @@ Two habits are worth naming, because both came from being burned:
   repo was confirmed to fail its test when reverted.
 - **The logger's own test writes through the real implementation** into an array,
   so correlation and error serialization are genuinely exercised, and the suite
-  asserts what a failing scan would actually say.
+  asserts what a failing scan would actually say. Telemetry is tested the same
+  way: spans and metrics run through the real OpenTelemetry SDK into memory, and
+  the exporter is driven against a local HTTP server to check the path, header,
+  and compression New Relic expects.
 
 CI runs lint, typecheck, tests with coverage, a production build, and a format
 check on every PR, plus a separate job that runs axe against the dashboard. `main`
@@ -245,7 +282,7 @@ is protected and requires both to pass.
 
 ## Why it's built this way
 
-Eight [Architecture Decision Records](./docs/adr/) record the decisions above — each
+Nine [Architecture Decision Records](./docs/adr/) record the decisions above — each
 with the alternatives that were rejected and **what the choice cost**, including
 the costs already paid. Requiring schema-validated output, for example, ruled out a
 Groq model that rejects the AI SDK's `json_schema` format.
@@ -263,6 +300,7 @@ Groq model that rejects the AI SDK's `json_schema` format.
   structured output validated with **Zod**, behind the failure policy above.
 - **Radix UI** — accessible accordion primitives.
 - **Docker Compose** — run the whole stack with one command.
+- **OpenTelemetry** → **New Relic** — traces, metrics and logs over OTLP.
 - **Vitest** + **GitHub Actions** — tests, coverage gate, and a dogfooded a11y job.
 
 ## Monorepo layout
@@ -280,7 +318,9 @@ ally-fix/
     llm/         Provider-agnostic LLM layer: errors, throttle, circuit breaker
       grounding/ WCAG criteria + axe rule facts injected into the prompt
     shared/      Zod schemas, types, scoring, SSRF guard, structured logger
+    telemetry/   OpenTelemetry config, span helpers, SDK bootstrap (New Relic via OTLP)
   docs/adr/      Architecture Decision Records
+  docs/observability.md  New Relic setup, metrics, dashboard, alerts
   docker-compose.yml
   .env.example
 ```
@@ -376,9 +416,10 @@ is documented too.
   RAM, which is not free anywhere. The on-demand model is an explicit cost
   trade-off, not an oversight — with pre-computed sample reports so the demo is
   always viewable.
-- **Distributed tracing.** The right answer once this is more than one worker;
-  premature while it is one. Noted as the rejected alternative in
-  [ADR-0006](./docs/adr/0006-structured-logging.md).
+- **Database and Redis spans.** postgres.js has no OpenTelemetry instrumentation,
+  and Redis spans would be mostly BullMQ's idle polling. DB and cache time show up
+  inside the pipeline spans instead. See
+  [ADR-0009](./docs/adr/0009-opentelemetry-to-new-relic.md).
 
 ## License
 
