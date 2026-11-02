@@ -1,0 +1,22 @@
+# Both Dockerfiles install dependencies in the image and then `COPY . .`. Without
+# this file that copy would carry the host's node_modules (macOS binaries over
+# the Linux ones just installed) and — worse — a local .env, baking real API
+# keys into an image layer that anyone who can pull the image can read.
+
+# Secrets
+.env
+.env.*
+!.env.example
+apps/worker/eval/models.json
+
+# Installed or built on the host; the image makes its own
+**/node_modules
+**/.next
+**/dist
+**/*.tsbuildinfo
+coverage
+
+# Not needed to build or run
+.git
+.claude
+**/.DS_Store
